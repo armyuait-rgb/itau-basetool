@@ -1,4 +1,4 @@
-# MegaTool
+# BaseTool
 
 **MegaTool** — багатопотоковий інструмент для тестування навантаження на мережеві сервіси (Layer 4 та Layer 7).  
 Підтримує атаки TCP, UDP, SYN (L4) та GET, POST, STRESS, SLOW, GSB, BYPASS (L7) із можливістю використання проксі.
@@ -38,7 +38,7 @@ pip install -r requirements.txt
 - proxy.json - База джерел проксі-серверів.
 - README.md - Документація проекту.
 --
-# MegaTool
+# BaseTool
 
 **MegaTool** is a multithreaded tool for load testing network services at Layer 4 and Layer 7.  
 It supports TCP, UDP, SYN methods at L4 and GET, POST, STRESS, SLOW, GSB, BYPASS methods at L7, with optional proxy support.
