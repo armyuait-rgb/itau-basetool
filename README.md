@@ -27,7 +27,7 @@
 
 ```bash
 git clone <repo-url>
-cd MegaTool
+cd BaseTool
 pip install -r requirements.txt
 ```
 
@@ -67,7 +67,7 @@ It supports TCP, UDP, SYN methods at L4 and GET, POST, STRESS, SLOW, GSB, BYPASS
 
 ```bash
 git clone <repo-url>
-cd MegaTool
+cd BaseTool
 pip install -r requirements.txt
 ```
 
