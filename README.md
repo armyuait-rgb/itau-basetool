@@ -71,7 +71,7 @@ cd MegaTool
 pip install -r requirements.txt
 ```
 
-№№ Files
+## Files
 - megatool.py — main script
 - requirements.txt — list of Python dependencies
 - config.json — configuration file containing default settings
