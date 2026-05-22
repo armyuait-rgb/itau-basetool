@@ -28,7 +28,8 @@
 ```bash
 git clone <repo-url>
 cd MegaTool
-pip install -r requirements.txt```
+pip install -r requirements.txt
+```
 
 ## Файли
 megatool.py - Основний скрипт
@@ -68,6 +69,7 @@ It supports TCP, UDP, SYN methods at L4 and GET, POST, STRESS, SLOW, GSB, BYPASS
 git clone <repo-url>
 cd MegaTool
 pip install -r requirements.txt
+```
 
 №№ Files
 megatool.py — main script
