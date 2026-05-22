@@ -18,7 +18,11 @@ jobs:
       - name: Dry-run inside container
         run: docker run --rm megatool-proxy-workability:ci --dry-run
 
-      - name: Dry-run on host (parity)
+      - name: Smoke inside container
+        run: docker run --rm megatool-proxy-workability:ci --smoke
+
+      - name: Smoke on host (parity)
         run: |
           python3 -m pip install --quiet -r requirements.txt
           python3 scripts/check_proxy_workability.py --dry-run
+          python3 scripts/check_proxy_workability.py --smoke

@@ -15,4 +15,4 @@ RUN useradd --create-home --uid 1000 megatool \
 USER megatool
 
 ENTRYPOINT ["python", "scripts/check_proxy_workability.py"]
-CMD ["--dry-run"]
+CMD ["--smoke"]

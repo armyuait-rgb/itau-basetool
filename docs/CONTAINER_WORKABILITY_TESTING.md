@@ -36,7 +36,8 @@ flowchart LR
 
 | Artifact | Role |
 |----------|------|
-| `scripts/check_proxy_workability.py` | CLI: `--dry-run`, `--force`, `--check-url` |
+| `scripts/check_proxy_workability.py` | CLI: `--dry-run`, `--smoke`, `--force`, `--check-url` |
+| `scripts/container-smoke.sh` | Local: build image + run dry-run and smoke in container |
 | `Dockerfile` | Python 3.11 slim image, non-root user, default `--dry-run` |
 | `docker-compose.yml` | Mounts `proxy.json` + `cache/`; `proxy-workability-force` bypasses cache |
 | `.github/workflows/proxy-workability.yml` | CI: build image + dry-run smoke test |
@@ -47,8 +48,10 @@ flowchart LR
 
 ```bash
 pip install -r requirements.txt
-python scripts/check_proxy_workability.py --dry-run
-python scripts/check_proxy_workability.py --check-url http://httpbin.org/get
+python scripts/check_proxy_workability.py --dry-run   # proxy.json only
+python scripts/check_proxy_workability.py --smoke    # imports + config.json + AttackManager
+./scripts/container-smoke.sh                         # build image + both checks in Docker
+python scripts/check_proxy_workability.py --check-url http://httpbin.org/get  # needs live proxies
 python scripts/check_proxy_workability.py --force
 ```
 
@@ -78,8 +81,13 @@ docker compose run --rm proxy-workability-force
 
 ## CI strategy
 
-1. **Smoke (every PR):** `docker build` + `docker run … --dry-run` — proves image and config parse; no dependency on live proxy lists.
-2. **Integration (optional / manual):** run without `--dry-run` when `proxy.json` points at real provider URLs; expect outbound HTTPS and may take minutes.
+| Check | When | What it proves |
+|-------|------|----------------|
+| `--dry-run` | Every PR / push to `main` | `proxy.json` parses; image starts |
+| `--smoke` | Every PR / push to `main` | PyRoxy, impacket, `megatool` import; `config.json` valid; `AttackManager` constructs |
+| Full workability | Manual / scheduled (optional) | Live proxy download + `ProxyChecker`; needs real URLs in `proxy.json` |
+
+Regular automated smoke is enough for day-to-day development. A full proxy check is only needed when you change provider URLs or checker behavior.
 
 ## Operational notes
 

@@ -76,9 +76,10 @@ pip install -r requirements.txt
 Proxy download and availability checks can run in Docker without starting attacks. See [docs/CONTAINER_WORKABILITY_TESTING.md](docs/CONTAINER_WORKABILITY_TESTING.md).
 
 ```bash
+./scripts/container-smoke.sh   # build + dry-run + smoke (recommended)
 docker build -t megatool-proxy-workability .
-docker run --rm megatool-proxy-workability --dry-run
-docker compose run --rm proxy-workability
+docker run --rm megatool-proxy-workability --smoke
+docker compose run --rm proxy-workability --dry-run
 ```
 
 ## Files

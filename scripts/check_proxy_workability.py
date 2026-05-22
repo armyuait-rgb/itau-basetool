@@ -48,7 +48,32 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Validate proxy.json only; no network or cache access",
     )
+    parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help="Load megatool + deps and validate config.json (no network)",
+    )
     return parser.parse_args()
+
+
+def _run_smoke(base_dir: Path) -> int:
+    from megatool import AttackManager, load_json_safe  # noqa: E402
+
+    config_path = base_dir / "config.json"
+    proxy_path = base_dir / "proxy.json"
+    for path in (config_path, proxy_path):
+        if not path.exists():
+            print(f"[smoke] Missing required file: {path}", file=sys.stderr)
+            return 2
+
+    config = load_json_safe(config_path)
+    providers = _load_proxy_providers(proxy_path)
+    AttackManager(config, providers)
+    print(
+        "[smoke] OK: imports, config.json, proxy.json, AttackManager init "
+        f"({len(providers)} provider(s))"
+    )
+    return 0
 
 
 def main() -> int:
@@ -56,8 +81,11 @@ def main() -> int:
     proxy_path = args.proxy_file.resolve()
 
     if not proxy_path.exists():
-        logger.error("Proxy file not found: %s", proxy_path)
+        print(f"[check] Proxy file not found: {proxy_path}", file=sys.stderr)
         return 2
+
+    if args.smoke:
+        return _run_smoke(BASE_DIR)
 
     try:
         proxy_providers = _load_proxy_providers(proxy_path)
