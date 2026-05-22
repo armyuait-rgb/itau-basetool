@@ -1,4 +1,4 @@
-PyRoxy
-impacket
-requests
-yarl
+PyRoxy>=0.1
+impacket>=0.13.1
+requests>=2.32.0
+yarl>=1.9.0

