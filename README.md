@@ -71,9 +71,21 @@ cd MegaTool
 pip install -r requirements.txt
 ```
 
+## Proxy workability testing (container)
+
+Proxy download and availability checks can run in Docker without starting attacks. See [docs/CONTAINER_WORKABILITY_TESTING.md](docs/CONTAINER_WORKABILITY_TESTING.md).
+
+```bash
+docker build -t megatool-proxy-workability .
+docker run --rm megatool-proxy-workability --dry-run
+docker compose run --rm proxy-workability
+```
+
 ## Files
 - megatool.py — main script
 - requirements.txt — list of Python dependencies
 - config.json — configuration file containing default settings
 - proxy.json — proxy source database
+- scripts/check_proxy_workability.py — standalone proxy workability CLI
+- Dockerfile / docker-compose.yml — containerized workability checks
 - README.md — project documentation

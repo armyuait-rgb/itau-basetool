@@ -1,0 +1,19 @@
+services:
+  proxy-workability:
+    build: .
+    image: megatool-proxy-workability:latest
+    volumes:
+      - ./cache:/app/cache
+      - ./proxy.json:/app/proxy.json:ro
+    environment:
+      CHECK_URL: ${CHECK_URL:-http://httpbin.org/get}
+    command:
+      - --check-url
+      - ${CHECK_URL:-http://httpbin.org/get}
+
+  proxy-workability-force:
+    extends: proxy-workability
+    command:
+      - --force
+      - --check-url
+      - ${CHECK_URL:-http://httpbin.org/get}
