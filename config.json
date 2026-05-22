@@ -1,0 +1,12 @@
+{
+  "settings": {
+    "threads": 100,
+    "rpc": 1,
+    "proxy": 1
+  },
+  "useragents": [],
+  "referers": [],
+  "targets": [
+    {"method": "GET", "target": "https://example.com/"}
+  ]
+}
