@@ -83,6 +83,7 @@ docker compose run --rm proxy-workability-force
 
 ## Operational notes
 
+- **PyRoxy install:** `requirements.txt` pulls MatrixTM/PyRoxy from a GitHub zip archive (no `git` binary required in the image).
 - **Network:** Full checks need egress to provider URLs and the `--check-url` host (default `httpbin.org`).
 - **Cache:** Bind-mount `./cache` so repeated runs reuse `proxies.json` for 24 hours unless `--force` is used.
 - **Secrets:** Do not bake credentials into the image; mount `proxy.json` at runtime if sources differ per environment.

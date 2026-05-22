@@ -1,4 +1,4 @@
-PyRoxy @ git+https://github.com/MatrixTM/PyRoxy.git@master
+PyRoxy @ https://github.com/MatrixTM/PyRoxy/archive/refs/heads/master.zip
 impacket
 requests
 yarl

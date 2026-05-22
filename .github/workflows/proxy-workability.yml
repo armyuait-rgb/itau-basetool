@@ -20,5 +20,5 @@ jobs:
 
       - name: Dry-run on host (parity)
         run: |
-          python -m pip install --quiet -r requirements.txt
-          python scripts/check_proxy_workability.py --dry-run
+          python3 -m pip install --quiet -r requirements.txt
+          python3 scripts/check_proxy_workability.py --dry-run
