@@ -1,0 +1,4 @@
+PyRoxy
+impacket
+requests
+yarl
