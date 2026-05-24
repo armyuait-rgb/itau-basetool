@@ -1,4 +1,4 @@
-PyRoxy
+PyRoxy @ git+https://github.com/MHProDev/PyRoxy.git
 impacket
 requests
 yarl
