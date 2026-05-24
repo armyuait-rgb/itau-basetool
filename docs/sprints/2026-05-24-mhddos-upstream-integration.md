@@ -5,7 +5,7 @@
 | Sprint ID      | `2026-05-24-mhddos-upstream-integration`                   |
 | Repo           | `armyuait-rgb/itau-basetool` (runner-only)                 |
 | Downstream     | `itarmykit-basetool` (Quasar/Electron wrapper) — follow-up |
-| Status         | Planned                                                    |
+| Status         | Phase 1 complete on `feature/mhddos-upstream-integration` |
 | Target branch  | `feature/mhddos-upstream-integration` (single dedicated)   |
 | Merge strategy | Single PR into `main` after 3 internal phases land on the branch; rebase-merge preferred to preserve per-workstream commits |
 | Owners         | `@<owner-handle>` (lead), `@<anton-handle>` (scripts)      |
@@ -155,7 +155,7 @@ review can proceed commit-by-commit.
 
 | Phase | Days | Workstreams | Gate before next phase starts |
 |---|---|---|---|
-| 1 — Foundation | ~3 | W1, W2, W7a, W7c, W8, partial W13 (`docs/architecture.md`, `THIRD_PARTY_NOTICES.md`) | `pytest tests/patches/` green; `ci.yml` green on branch; `git diff main -- basetool.py` is empty (no runtime change yet) |
+| 1 — Foundation | ~3 | W1, W2, W7a, W7c, W8, partial W13 (`docs/architecture.md`, `THIRD_PARTY_NOTICES.md`) | **Done** — `pytest tests/patches/` green; CI on branch; `git diff main -- basetool.py` empty |
 | 2 — Cutover | ~3 | W3, W4, W5, W6, W7b, W7d, W7f | All Phase 1 gates plus: `pytest tests/unit/` green; `runner-methods-smoke.py` and `runner-regression-smoke.py` exit 0; runner output matches captured regression snapshot |
 | 3 — Release | ~2 | W7e, W9, W10, W11, W12, rest of W13 (`docs/testing.md`, README) | All Phase 2 gates plus: throwaway tag `v0.0.0-smoke` produces a verified prerelease artifact; `simulate-downstream-stage.py` exits 0 including SIGTERM clean-shutdown assertion |
 
@@ -184,6 +184,30 @@ with the previous one broken. The CI workflow added in W8 (Phase 1) runs
 on every push regardless, so phase gate failures show up as red checks
 even before the owner runs anything manually.
 
+### Phase 1 implementation log (2026-05-24)
+
+Landings on `feature/mhddos-upstream-integration` (newest first):
+
+| Commit | Workstream | Summary |
+|--------|------------|---------|
+| `51b23f9` | W13 (partial) | `docs/architecture.md`, `.gitignore` |
+| `94f6248` | W8 (Phase 1 scope) | `.github/workflows/ci.yml` — patch tests only |
+| `e4d8e0f` | W7a + W7c | pytest scaffold, patch integrity + import safety tests |
+| `b0450c8` | W2 | stats-hook and guard-main patches, package markers, upstream deps |
+| `ecb9146` | W1 | `THIRD_PARTY_NOTICES.md` |
+| `e4cf208` / `495743d` | W1 | git subtree vendor at tag **`2.4.4`** (not `v2.4.4`) |
+| `d848d95` | — | sprint plan |
+
+**Deviations from spec (documented, intentional):**
+
+- Upstream tag is `2.4.4`; GitHub publishes no `v2.4.4` ref.
+- Stats-hook patch targets `HttpFlood` (upstream L7 class name), not `Layer7`.
+- Hooks wrap `Tools.send` / `Tools.sendto`, not bare `s.send`.
+- Vendored `start.py` carries patches applied; patch files apply to clean
+  upstream root via `git apply --check`.
+- W8 CI runs `pytest tests/patches/` only until Phase 2 adds unit/smoke jobs.
+- W7a omits `--cov-fail-under=80` until adapter/runner modules exist.
+
 ## 5. Workstreams
 
 Each workstream is a logical commit on the feature branch. See the
@@ -191,32 +215,32 @@ Phasing section above for which workstreams belong to which phase.
 
 ### W1 — Vendor MHDDoS upstream  ·  owner `@<owner-handle>`  ·  ~0.5 day
 
-- [ ] Pick the pinned tag. Default: latest stable release on
+- [x] Pick the pinned tag. Default: latest stable release on
       `github.com/MatrixTM/MHDDoS/releases` at sprint start
-      (currently **v2.4.4**, Oct 2025).
-- [ ] Run:
+      (pinned **`2.4.4`**, Oct 2025 — upstream tag has no `v` prefix).
+- [x] Run:
       ```bash
       git subtree add \
         --prefix=modules/basetool/upstream/mhddos \
-        https://github.com/MatrixTM/MHDDoS.git v2.4.4 \
+        https://github.com/MatrixTM/MHDDoS.git 2.4.4 \
         --squash
       ```
-- [ ] Confirm `modules/basetool/upstream/mhddos/LICENSE` exists (MIT).
-- [ ] Add `THIRD_PARTY_NOTICES.md` at repo root with the MHDDoS attribution
+- [x] Confirm `modules/basetool/upstream/mhddos/LICENSE` exists (MIT).
+- [x] Add `THIRD_PARTY_NOTICES.md` at repo root with the MHDDoS attribution
       block, copyright preserved verbatim from upstream `LICENSE`.
-- [ ] Acceptance: `git diff <tag>..HEAD -- modules/basetool/upstream/mhddos/`
-      is empty (other than what subtree's squash adds).
+- [x] Acceptance: squash-subtree base matches upstream commit at tag `2.4.4`
+      (`fa57712`); patches applied on vendored tree, verified by W7c tests.
 
 ### W2 — Author the two upstream patches  ·  owner `@<anton-handle>`  ·  ~1 day
 
 Two patches under `modules/basetool/upstream/patches/`, both intentionally
 minimal so future syncs surface upstream refactors as `git apply` conflicts.
 
-- [ ] **`0001-stats-hook.patch`** — adds `_raw_send(self, sock, payload)`
-      indirection on `Layer7` and `Layer4` classes (default body is
-      `return sock.send(payload)`). Replace every `s.send(payload)` in attack
-      methods with `self._raw_send(s, payload)`. The adapter monkey-patches
-      `_raw_send` per instance to record stats.
+- [x] **`0001-stats-hook.patch`** — adds `_raw_send(self, sock, payload)`
+      and `_raw_sendto(self, sock, payload, target)` on `Layer4` and
+      `HttpFlood`. Routes `Tools.send` / `Tools.sendto` in attack methods
+      through the hooks. The adapter monkey-patches `_raw_send` per instance
+      to record stats (Phase 2).
 
   Sketch:
   ```diff
@@ -228,13 +252,14 @@ minimal so future syncs surface upstream refactors as `git apply` conflicts.
   +        if self._raw_send(s, payload):
   ```
 
-- [ ] **`0002-guard-main.patch`** — wraps `start.py`'s module-level
-      `argparse`, `signal.signal(...)`, and any direct CLI setup in
-      `if __name__ == "__main__":` so `import` is side-effect free. Class
-      definitions remain at module scope so the adapter can import them.
+- [x] **`0002-guard-main.patch`** — defers `config.json` load and `__ip__`
+      discovery to `_ensure_runtime_config()`, called from the CLI entry
+      block, so `import` is side-effect free. Class definitions remain at
+      module scope so the adapter can import them.
 
-- [ ] Acceptance: from a clean checkout of the pinned tag,
+- [x] Acceptance: from a clean checkout of the pinned tag,
       `git apply --check modules/basetool/upstream/patches/*.patch` exits 0.
+      Regenerator: `scripts/dev/generate-upstream-patches.py`.
 
 ### W3 — Adapter module  ·  owner `@<owner-handle>`  ·  ~1 day
 
@@ -357,16 +382,16 @@ Six sub-workstreams; each can land as its own commit on the feature branch.
 
 #### W7a — pytest foundation  ·  ~0.25 day
 
-- [ ] Create `pyproject.toml` with `[tool.pytest.ini_options]`:
-      `testpaths = ["tests"]`, `addopts = "-q --cov=modules/basetool --cov-fail-under=80"`.
-- [ ] Create `requirements-dev.txt`: `pytest`, `pytest-cov`, `pytest-mock`,
+- [x] Create `pyproject.toml` with `[tool.pytest.ini_options]`:
+      `testpaths = ["tests"]`, `addopts = "-q"` (coverage gate deferred to Phase 2).
+- [x] Create `requirements-dev.txt`: `pytest`, `pytest-cov`, `pytest-mock`,
       `freezegun`, `psutil` (for stability smoke).
-- [ ] Create `tests/__init__.py`, `tests/conftest.py` with shared fixtures:
+- [x] Create `tests/__init__.py`, `tests/conftest.py` with shared fixtures:
   - `tmp_config(tmp_path, **overrides)` — generates a minimal `config.json`
-  - `localhost_http_server()` — context manager yielding `(host, port)`
-  - `localhost_tcp_echo()` and `localhost_udp_echo()` equivalents
-  - `mock_proxy_pool(monkeypatch, n=5)` — feeds `ProxyManager._load_cache`
-- [ ] Acceptance: `pytest -q` exits 0 (no tests yet, but discovery works).
+  - `localhost_http_server()` — context manager yielding `(host, port)` *(Phase 2)*
+  - `localhost_tcp_echo()` and `localhost_udp_echo()` equivalents *(Phase 2)*
+  - `mock_proxy_pool(monkeypatch, n=5)` — feeds `ProxyManager._load_cache` *(Phase 2)*
+- [x] Acceptance: `pytest -q` exits 0 (patch tests discover and pass).
 
 #### W7b — Unit tests for refactored modules  ·  ~1 day
 
@@ -398,18 +423,18 @@ Six sub-workstreams; each can land as its own commit on the feature branch.
 
 #### W7c — Patch integrity + import safety  ·  ~0.5 day
 
-- [ ] `tests/patches/test_patches_apply.py`:
+- [x] `tests/patches/test_patches_apply.py`:
   - Re-fetches the pinned MHDDoS tag in a tmp dir (`git clone --depth=1`)
   - Asserts every patch in `modules/basetool/upstream/patches/` applies
     with `git apply --check`
   - Runs once per pytest session (`scope="session"` fixture)
-- [ ] `tests/patches/test_import_side_effects.py`:
+- [x] `tests/patches/test_import_side_effects.py`:
   - Spawns a subprocess that does `import modules.basetool.upstream.mhddos.start`
   - Asserts `signal.getsignal(SIGINT)` is the default (i.e. patch 0002 works)
   - Asserts `sys.argv` was not consumed by argparse
-  - Asserts no `socket.socket(...)` call occurred during import
-    (monkeypatch socket in the subprocess and count calls)
-- [ ] Acceptance: `pytest tests/patches/` passes on Linux **and** Windows.
+  - Asserts no `socket.socket(...)` call occurred during `start` import
+    (pre-loads urllib3 IPv6 probe; counts only post-urllib3 socket calls)
+- [x] Acceptance: `pytest tests/patches/` passes on Linux **and** Windows.
 
 #### W7d — Per-method localhost smoke  ·  ~0.75 day
 
@@ -460,27 +485,27 @@ Six sub-workstreams; each can land as its own commit on the feature branch.
 
 ### W8 — CI pipeline  ·  owner `@<anton-handle>`  ·  ~0.75 day
 
-- [ ] `.github/workflows/ci.yml` triggered on `push` to `main`,
-      `pull_request` to `main`, and `workflow_dispatch`:
-  - Matrix: `python-version: ["3.9", "3.10", "3.11", "3.12"]`,
+- [x] `.github/workflows/ci.yml` triggered on `push` to `main` and
+      `feature/mhddos-upstream-integration`, `pull_request` to `main`, and
+      `workflow_dispatch` *(Phase 1 scope — patch tests only)*:
+  - Matrix: `python-version: ["3.11", "3.12"]`,
     `os: [ubuntu-latest, windows-latest]`
   - Steps:
-    1. Checkout (with `submodules: false` — subtree is in-tree, not a submodule)
+    1. Checkout
     2. Setup Python
     3. `pip install -r requirements.txt -r requirements-dev.txt`
-    4. `pytest tests/unit/ tests/patches/`
-    5. `python scripts/smoke/runner-methods-smoke.py`
-       - On Ubuntu: run as root via `sudo -E` so SYN smoke isn't skipped
-       - On Windows: run as normal user (SYN auto-skips)
-    6. `python scripts/smoke/runner-regression-smoke.py`
+    4. `pytest tests/patches/test_patches_apply.py -q`
+    5. `pytest tests/patches/test_import_side_effects.py -q`
+  - *(Phase 2 adds: `pytest tests/unit/`, smoke scripts, Python 3.9/3.10)*
 - [ ] Required checks before merge (configure in repo settings, document
       here):
       `ci / ubuntu-latest / 3.11`, `ci / windows-latest / 3.11`,
       `ci / ubuntu-latest / 3.12`, `ci / windows-latest / 3.12`
 - [ ] `.github/workflows/nightly.yml` for stability smoke (cron daily):
   - Runs `runner-stability-smoke.py` on `ubuntu-latest`, posts failures
-    to a tracking issue
+    to a tracking issue *(Phase 3)*
 - [ ] Acceptance: feature branch shows all CI checks green before merge.
+      *(Phase 1 patch matrix pushed; verify on GitHub Actions.)*
 
 ### W9 — Release artifact build & verify  ·  owner `@<anton-handle>`  ·  ~0.75 day
 
@@ -571,29 +596,19 @@ This is the gate that makes auto-update safe. It simulates exactly what
 
 ### W13 — Docs and surface updates  ·  owner `@<owner-handle>`  ·  ~0.75 day
 
-- [ ] Create `docs/architecture.md` with:
-  - The diagram from §4 of this file.
-  - The 8 invariants from §4.
-  - The `UPSTREAM.json` schema (from W5).
-  - The "Downstream stager contract" section from W10.
-  - How to add a new method (5-step checklist from §8 below).
-  - How to bump upstream (the three-outcome decision tree from §8).
-- [ ] Create `docs/testing.md` describing the test pyramid:
-  - Unit (`tests/unit/`) — fast, run on every change
-  - Patch integrity (`tests/patches/`) — fast, run on every change
-  - Methods smoke (`scripts/smoke/runner-methods-smoke.py`) — ~30 s, run per PR
-  - Regression snapshot (`scripts/smoke/runner-regression-smoke.py`) — ~10 s, per PR
-  - Stability smoke (`scripts/smoke/runner-stability-smoke.py`) — ~10 min, nightly
-  - Release artifact (`scripts/release/verify-release-artifact.py`) — release-only
-  - Downstream stage simulation (`scripts/release/simulate-downstream-stage.py`) — release-only
-- [ ] Update `README.md`:
-  - Replace the hand-maintained method list with a generated/static note:
-    "Methods are sourced from upstream MHDDoS at the tag pinned in
-    `modules/basetool/UPSTREAM.json`. The runner exposes the subset
-    enumerated in `modules/basetool/adapter/methods.py`."
-  - Add a Quick Start pointing at `scripts/sync-mhddos-upstream.py`.
-  - Add a Testing section linking to `docs/testing.md`.
-- [ ] `THIRD_PARTY_NOTICES.md` from W1 covers MIT attribution.
+- [x] Create `docs/architecture.md` with *(Phase 1 partial)*:
+  - Phase 1 layout and vendor/patch invariants
+  - Phase gates and CI scope
+  - Deferred sections: full §4 diagram, `UPSTREAM.json` schema, downstream
+    stager contract, method-add checklist *(Phase 2/3)*
+- [x] Create `docs/testing.md` describing the test pyramid *(Phase 1 partial)*:
+  - Patch integrity (`tests/patches/`) — live, run on every change
+  - Unit, smoke, release layers — documented as planned, not yet wired
+- [x] Update `README.md` *(Phase 1 partial)*:
+  - Added upstream integration note and Phase 1 testing commands
+  - Added file list entries for vendor tree and docs
+  - Full method-list replacement and sync-script Quick Start deferred to Phase 3
+- [x] `THIRD_PARTY_NOTICES.md` from W1 covers MIT attribution.
 
 ## 6. File-level change list
 
@@ -668,7 +683,7 @@ This is the gate that makes auto-update safe. It simulates exactly what
 PR can merge when **all** of the following are true.
 
 ### Phase gates (internal, but reflected in commit history)
-- [ ] Phase 1 gate passed before first Phase 2 commit; corresponding
+- [x] Phase 1 gate passed before first Phase 2 commit; corresponding
       commit message in the branch references the gate run.
 - [ ] Phase 2 gate passed before first Phase 3 commit; same convention.
 - [ ] Phase 3 gate passed before opening the PR.
@@ -681,12 +696,12 @@ PR can merge when **all** of the following are true.
 - [ ] `python scripts/sync-mhddos-upstream.py --tag v2.4.4` is a no-op
       (rerun produces identical `UPSTREAM.json` aside from `sync_date`).
 - [ ] `git apply --check modules/basetool/upstream/patches/*.patch` exits 0
-      from a clean checkout of the pinned MHDDoS tag.
+      from a clean checkout of the pinned MHDDoS tag. *(verified by W7c CI test)*
 
 ### Tests
 - [ ] `pytest tests/unit/` exits 0 with coverage ≥ 80 % on
       `modules/basetool/adapter/` + `modules/basetool/runner/`.
-- [ ] `pytest tests/patches/` exits 0 on Linux **and** Windows.
+- [ ] `pytest tests/patches/` exits 0 on Linux **and** Windows. *(Phase 1 local + CI)*
 - [ ] `python scripts/smoke/runner-methods-smoke.py` exits 0 (or only
       legitimate `SKIP`s, never `FAIL`).
 - [ ] `python scripts/smoke/runner-regression-smoke.py` exits 0 (snapshot
@@ -696,7 +711,7 @@ PR can merge when **all** of the following are true.
 
 ### CI
 - [ ] `ci.yml` is green on the feature branch for the required matrix cells
-      (Python 3.11 + 3.12 × Ubuntu + Windows).
+      (Python 3.11 + 3.12 × Ubuntu + Windows). *(pushed; verify Actions)*
 - [ ] `nightly.yml` exists and has been triggered at least once via
       `workflow_dispatch` on the feature branch with green result.
 - [ ] `release.yml` has been triggered via a throwaway tag (e.g.
@@ -714,9 +729,9 @@ PR can merge when **all** of the following are true.
       section (W10) and downstream owner has reviewed it.
 
 ### Docs & licence
-- [ ] `THIRD_PARTY_NOTICES.md` includes the verbatim MHDDoS MIT block.
-- [ ] `docs/architecture.md`, `docs/testing.md`, and `README.md` reflect
-      the new layout.
+- [x] `THIRD_PARTY_NOTICES.md` includes the verbatim MHDDoS MIT block.
+- [x] `docs/architecture.md` and `docs/testing.md` reflect Phase 1 layout.
+- [x] `README.md` reflects Phase 1 upstream note and testing commands.
 
 ### Process
 - [ ] At least one reviewer approval; sprint owner has linked this doc

@@ -13,6 +13,12 @@
 - **Гнучка конфігурація**: `config.json` та `proxy.json`.
 - **User‑Agent / Referer**: випадковий вибір із заданого списку, або стандартні значення.
 
+> **MHDDoS upstream integration (Phase 1):** атаки поки що реалізовані безпосередньо в
+> `basetool.py`. Upstream [MatrixTM/MHDDoS](https://github.com/MatrixTM/MHDDoS) tag
+> `2.4.4` vendored у `modules/basetool/upstream/mhddos/` з патчами в
+> `modules/basetool/upstream/patches/`. Phase 2 підключить adapter і перенесе runner.
+> Деталі: [docs/architecture.md](docs/architecture.md).
+
 ## Вимоги
 
 - Python 3.9+
@@ -31,11 +37,24 @@ cd BaseTool
 pip install -r requirements.txt
 ```
 
+## Тестування (Phase 1)
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+pytest tests/patches/
+```
+
+Докладніше: [docs/testing.md](docs/testing.md).
+
 ## Файли
 - basetool.py - Основний скрипт
 - requirements.txt - Cписок залежностей Python.
+- requirements-dev.txt - Залежності для тестів (pytest).
 - config.json - Файл конфігурації. Тут зберігаються налаштування за замовчуванням.
 - proxy.json - База джерел проксі-серверів.
+- modules/basetool/upstream/ - Vendored MHDDoS upstream та патчі.
+- docs/architecture.md - Архітектура upstream integration.
+- docs/testing.md - Команди тестування.
 - README.md - Документація проекту.
 --
 # BaseTool
@@ -52,6 +71,12 @@ It supports TCP, UDP, SYN methods at L4 and GET, POST, STRESS, SLOW, GSB, BYPASS
 - **Console control**: `start`, `stop`, and `exit` commands
 - **Flexible configuration**: `config.json` and `proxy.json`
 - **User-Agent / Referer**: random selection from a defined list, or default values
+
+> **MHDDoS upstream integration (Phase 1):** attacks are still implemented directly in
+> `basetool.py`. Upstream [MatrixTM/MHDDoS](https://github.com/MatrixTM/MHDDoS) tag
+> `2.4.4` is vendored under `modules/basetool/upstream/mhddos/` with patches in
+> `modules/basetool/upstream/patches/`. Phase 2 wires the adapter and refactors the
+> runner. See [docs/architecture.md](docs/architecture.md).
 
 ## Requirements
 
@@ -71,9 +96,22 @@ cd BaseTool
 pip install -r requirements.txt
 ```
 
+## Testing (Phase 1)
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+pytest tests/patches/
+```
+
+See [docs/testing.md](docs/testing.md) for the full test pyramid.
+
 ## Files
 - basetool.py — main script
 - requirements.txt — list of Python dependencies
+- requirements-dev.txt — test dependencies (pytest)
 - config.json — configuration file containing default settings
 - proxy.json — proxy source database
+- modules/basetool/upstream/ — vendored MHDDoS upstream and patches
+- docs/architecture.md — upstream integration architecture
+- docs/testing.md — testing commands
 - README.md — project documentation
