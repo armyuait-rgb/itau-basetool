@@ -2,6 +2,7 @@
 """
 MegaTool
 """
+from __future__ import annotations
 
 import json
 import logging
@@ -643,8 +644,14 @@ def console(manager: AttackManager):
 # ----------------------------------------------------------------------
 # Main
 # ----------------------------------------------------------------------
+def resolve_runtime_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path.cwd()
+    return Path(__file__).resolve().parent
+
+
 def main():
-    base_dir = Path(__file__).resolve().parent
+    base_dir = resolve_runtime_dir()
     config_path = base_dir / "config.json"
     proxy_path = base_dir / "proxy.json"
 
