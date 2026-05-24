@@ -13,11 +13,10 @@
 - **Гнучка конфігурація**: `config.json` та `proxy.json`.
 - **User‑Agent / Referer**: випадковий вибір із заданого списку, або стандартні значення.
 
-> **MHDDoS upstream integration (Phase 1):** атаки поки що реалізовані безпосередньо в
-> `basetool.py`. Upstream [MatrixTM/MHDDoS](https://github.com/MatrixTM/MHDDoS) tag
-> `2.4.4` vendored у `modules/basetool/upstream/mhddos/` з патчами в
-> `modules/basetool/upstream/patches/`. Phase 2 підключить adapter і перенесе runner.
-> Деталі: [docs/architecture.md](docs/architecture.md).
+> **MHDDoS upstream integration (Phase 2):** attacks run through the adapter in
+> `modules/basetool/adapter/` over vendored [MatrixTM/MHDDoS](https://github.com/MatrixTM/MHDDoS)
+> tag `2.4.4`. Runner orchestration lives in `modules/basetool/runner/`.
+> Details: [docs/architecture.md](docs/architecture.md).
 
 ## Вимоги
 
@@ -37,11 +36,14 @@ cd BaseTool
 pip install -r requirements.txt
 ```
 
-## Тестування (Phase 1)
+## Тестування (Phase 2)
 
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt
 pytest tests/patches/
+pytest tests/unit/
+python scripts/smoke/runner-methods-smoke.py
+python scripts/smoke/runner-regression-smoke.py
 ```
 
 Докладніше: [docs/testing.md](docs/testing.md).
@@ -72,11 +74,10 @@ It supports TCP, UDP, SYN methods at L4 and GET, POST, STRESS, SLOW, GSB, BYPASS
 - **Flexible configuration**: `config.json` and `proxy.json`
 - **User-Agent / Referer**: random selection from a defined list, or default values
 
-> **MHDDoS upstream integration (Phase 1):** attacks are still implemented directly in
-> `basetool.py`. Upstream [MatrixTM/MHDDoS](https://github.com/MatrixTM/MHDDoS) tag
-> `2.4.4` is vendored under `modules/basetool/upstream/mhddos/` with patches in
-> `modules/basetool/upstream/patches/`. Phase 2 wires the adapter and refactors the
-> runner. See [docs/architecture.md](docs/architecture.md).
+> **MHDDoS upstream integration (Phase 2):** attacks run through the adapter in
+> `modules/basetool/adapter/` over vendored [MatrixTM/MHDDoS](https://github.com/MatrixTM/MHDDoS)
+> tag `2.4.4`. Runner orchestration lives in `modules/basetool/runner/`.
+> See [docs/architecture.md](docs/architecture.md).
 
 ## Requirements
 
@@ -96,11 +97,14 @@ cd BaseTool
 pip install -r requirements.txt
 ```
 
-## Testing (Phase 1)
+## Testing (Phase 2)
 
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt
 pytest tests/patches/
+pytest tests/unit/
+python scripts/smoke/runner-methods-smoke.py
+python scripts/smoke/runner-regression-smoke.py
 ```
 
 See [docs/testing.md](docs/testing.md) for the full test pyramid.

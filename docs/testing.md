@@ -1,8 +1,8 @@
 # BaseTool runner testing
 
-Test infrastructure for the MHDDoS upstream integration. **Phase 1** covers
-patch integrity and import safety only; unit and smoke layers arrive in
-Phases 2 and 3.
+Test infrastructure for the MHDDoS upstream integration. **Phase 2** adds unit
+tests, per-method smoke, and regression snapshot parity on top of the Phase 1
+patch gates.
 
 Architecture context: [docs/architecture.md](architecture.md).
 
@@ -12,36 +12,73 @@ Architecture context: [docs/architecture.md](architecture.md).
 pip install -r requirements.txt -r requirements-dev.txt
 ```
 
-Runtime deps include upstream import requirements (`cloudscraper`, `certifi`,
-`dnspython`, `psutil`, `icmplib`, `pyasn1`) added in Phase 1 so the import
-side-effects test can load the vendored `start.py`.
-
-## Phase 1 commands
-
-Run the full Phase 1 gate:
+## Phase 2 gate (full cutover check)
 
 ```bash
 pytest tests/patches/
+pytest tests/unit/
+python scripts/smoke/runner-methods-smoke.py
+python scripts/smoke/runner-regression-smoke.py
+python -c "from modules.basetool.adapter import METHOD_REGISTRY; print(sorted(METHOD_REGISTRY))"
+python scripts/sync-mhddos-upstream.py --tag 2.4.4 --no-smoke --skip-subtree
 ```
 
-Individual suites:
+## Patch tests
 
 ```bash
-# Patches apply cleanly to a fresh checkout of MHDDoS tag 2.4.4
 pytest tests/patches/test_patches_apply.py -q
-
-# Importing upstream start.py has no signal/argv/socket side effects
 pytest tests/patches/test_import_side_effects.py -q
 ```
 
-Verify runtime entrypoint is untouched (Phase 1 invariant):
+## Unit tests
 
 ```bash
-git diff main -- basetool.py
+pytest tests/unit/ -q
 ```
 
-Regenerate upstream patch files after editing the patch generator or upstream
-layout:
+Coverage gate (configured in `pyproject.toml`): ≥ 80 % on
+`modules/basetool/adapter/` and `modules/basetool/runner/`.
+
+## Smoke tests
+
+Per-method localhost traffic (SYN skipped on Windows / non-root):
+
+```bash
+python scripts/smoke/runner-methods-smoke.py
+```
+
+Regression snapshot parity against `tests/fixtures/regression-snapshot-pre.txt`:
+
+```bash
+python scripts/smoke/runner-regression-smoke.py
+```
+
+Regression smoke stages `tests/fixtures/minimal-config.json` into a temp dir
+and sets `BASETOOL_RUNTIME_DIR` so the runner under test does not depend on the
+repo's default `config.json`.
+
+## Test pyramid
+
+| Layer | Location | When it runs | Phase |
+|-------|----------|--------------|-------|
+| Patch integrity | `tests/patches/` | Every push/PR (CI) | **1 — live** |
+| Unit | `tests/unit/` | Every push/PR (CI) | **2 — live** |
+| Methods smoke | `scripts/smoke/runner-methods-smoke.py` | Every push/PR (CI) | **2 — live** |
+| Regression snapshot | `scripts/smoke/runner-regression-smoke.py` | Every push/PR (CI) | **2 — live** |
+| Stability / leak | `scripts/smoke/runner-stability-smoke.py` | Nightly | 3 |
+| Release artifact | `scripts/release/verify-release-artifact.py` | Tag push | 3 |
+| Downstream stage | `scripts/release/simulate-downstream-stage.py` | Tag push | 3 |
+
+## CI
+
+Workflow: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
+
+Matrix: Ubuntu + Windows × Python 3.11 + 3.12. Each cell runs patch tests,
+unit tests, methods smoke, and regression smoke.
+
+## Maintenance commands
+
+Regenerate upstream patch files:
 
 ```bash
 python scripts/dev/generate-upstream-patches.py
@@ -53,43 +90,23 @@ Re-apply patches to the vendored tree:
 git apply --directory=modules/basetool/upstream/mhddos modules/basetool/upstream/patches/*.patch
 ```
 
-## Test pyramid (planned)
+Refresh upstream manifest without subtree pull:
 
-| Layer | Location | When it runs | Phase |
-|-------|----------|--------------|-------|
-| Patch integrity | `tests/patches/` | Every push/PR (CI) | **1 — live** |
-| Unit | `tests/unit/` | Every push/PR (CI) | 2 |
-| Methods smoke | `scripts/smoke/runner-methods-smoke.py` | Every push/PR (CI) | 2 |
-| Regression snapshot | `scripts/smoke/runner-regression-smoke.py` | Every push/PR (CI) | 2 |
-| Stability / leak | `scripts/smoke/runner-stability-smoke.py` | Nightly | 3 |
-| Release artifact | `scripts/release/verify-release-artifact.py` | Tag push | 3 |
-| Downstream stage | `scripts/release/simulate-downstream-stage.py` | Tag push | 3 |
+```bash
+python scripts/sync-mhddos-upstream.py --tag 2.4.4 --no-smoke --skip-subtree
+```
 
-## CI
-
-Workflow: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
-
-Phase 1 matrix: Ubuntu + Windows × Python 3.11 + 3.12, running
-`pytest tests/patches/` only.
-
-Watch runs:
-<https://github.com/armyuait-rgb/itau-basetool/actions?query=branch%3Afeature%2Fmhddos-upstream-integration>
-
-## Coverage
-
-Phase 1 `pyproject.toml` configures pytest discovery only (`addopts = "-q"`).
-The `--cov-fail-under=80` gate on `modules/basetool/adapter/` and
-`modules/basetool/runner/` activates in Phase 2 when those modules and
-`tests/unit/` exist.
-
-## Fixtures (Phase 1)
+## Fixtures
 
 `tests/conftest.py` provides:
 
-- `repo_root` — repository root path
-- `patch_dir` — `modules/basetool/upstream/patches/`
-- `upstream_tag` — pinned tag `2.4.4`
-- `tmp_config` — minimal `config.json` builder (used by Phase 2 smokes)
+- `repo_root`, `patch_dir`, `upstream_tag`
+- `tmp_config` — minimal `config.json` builder
+- `localhost_http_server`, `localhost_tcp_echo`, `localhost_udp_echo`
+- `mock_proxy_pool` — short-circuits proxy cache for unit tests
 
-Additional fixtures (`localhost_http_server`, `mock_proxy_pool`, etc.) land
-with Phase 2 unit and smoke work.
+Regression fixtures under `tests/fixtures/`:
+
+- `minimal-config.json` — single localhost GET target, 4 threads
+- `regression-input.txt` — console commands (`stop`, `exit`)
+- `regression-snapshot-pre.txt` — captured pre-merge reference output

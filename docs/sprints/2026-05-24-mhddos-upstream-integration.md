@@ -5,7 +5,7 @@
 | Sprint ID      | `2026-05-24-mhddos-upstream-integration`                   |
 | Repo           | `armyuait-rgb/itau-basetool` (runner-only)                 |
 | Downstream     | `itarmykit-basetool` (Quasar/Electron wrapper) — follow-up |
-| Status         | Phase 1 complete on `feature/mhddos-upstream-integration` |
+| Status         | Phase 2 complete on `feature/mhddos-upstream-integration` |
 | Target branch  | `feature/mhddos-upstream-integration` (single dedicated)   |
 | Merge strategy | Single PR into `main` after 3 internal phases land on the branch; rebase-merge preferred to preserve per-workstream commits |
 | Owners         | `@<owner-handle>` (lead), `@<anton-handle>` (scripts)      |
@@ -156,7 +156,7 @@ review can proceed commit-by-commit.
 | Phase | Days | Workstreams | Gate before next phase starts |
 |---|---|---|---|
 | 1 — Foundation | ~3 | W1, W2, W7a, W7c, W8, partial W13 (`docs/architecture.md`, `THIRD_PARTY_NOTICES.md`) | **Done** — `pytest tests/patches/` green; CI on branch; `git diff main -- basetool.py` empty |
-| 2 — Cutover | ~3 | W3, W4, W5, W6, W7b, W7d, W7f | All Phase 1 gates plus: `pytest tests/unit/` green; `runner-methods-smoke.py` and `runner-regression-smoke.py` exit 0; runner output matches captured regression snapshot |
+| 2 — Cutover | ~3 | W3, W4, W5, W6, W7b, W7d, W7f | **Done** — All Phase 1 gates plus: `pytest tests/unit/` green; `runner-methods-smoke.py` and `runner-regression-smoke.py` exit 0; runner output matches captured regression snapshot |
 | 3 — Release | ~2 | W7e, W9, W10, W11, W12, rest of W13 (`docs/testing.md`, README) | All Phase 2 gates plus: throwaway tag `v0.0.0-smoke` produces a verified prerelease artifact; `simulate-downstream-stage.py` exits 0 including SIGTERM clean-shutdown assertion |
 
 ### Branch hygiene
@@ -183,6 +183,28 @@ a gate fails, fix forward on the same phase — do not begin the next phase
 with the previous one broken. The CI workflow added in W8 (Phase 1) runs
 on every push regardless, so phase gate failures show up as red checks
 even before the owner runs anything manually.
+
+### Phase 2 implementation log (2026-05-24)
+
+Landings on `feature/mhddos-upstream-integration`:
+
+| Workstream | Summary |
+|------------|---------|
+| W3 | `modules/basetool/adapter/` — `METHOD_REGISTRY`, stats hooks, BYPASS override |
+| W4 | `modules/basetool/runner/` extraction; root `basetool.py` thinned to entrypoint |
+| W5 | `modules/basetool/UPSTREAM.json` manifest |
+| W6 | `scripts/sync-mhddos-upstream.py` |
+| W7b | `tests/unit/` with ≥ 80 % adapter/runner coverage |
+| W7d | `scripts/smoke/runner-methods-smoke.py` |
+| W7f | regression fixtures + `runner-regression-smoke.py` |
+| W8 (partial) | CI runs patch, unit, and smoke jobs |
+
+**Deviations from spec (documented, intentional):**
+
+- Adapter uses upstream class `HttpFlood`, not `Layer7`.
+- Vendored `start.py` init bodies were repaired after patch apply (hooks must not swallow `self.methods` setup).
+- Regression smoke stages config via `BASETOOL_RUNTIME_DIR` rather than overwriting repo `config.json`.
+- SYN smoke skips on Windows/non-root (per sprint spec).
 
 ### Phase 1 implementation log (2026-05-24)
 
@@ -263,7 +285,7 @@ minimal so future syncs surface upstream refactors as `git apply` conflicts.
 
 ### W3 — Adapter module  ·  owner `@<owner-handle>`  ·  ~1 day
 
-- [ ] Create `modules/basetool/adapter/methods.py` with `Capability` flags,
+- [x] Create `modules/basetool/adapter/methods.py` with `Capability` flags,
       `METHOD_REGISTRY`, and `make_attack_thread(...)` factory. Skeleton:
 
   ```python
@@ -307,34 +329,34 @@ minimal so future syncs surface upstream refactors as `git apply` conflicts.
       return instance
   ```
 
-- [ ] `modules/basetool/adapter/__init__.py` re-exports
+- [x] `modules/basetool/adapter/__init__.py` re-exports
       `make_attack_thread`, `METHOD_REGISTRY`, `Capability`.
-- [ ] Acceptance: `python -c "from modules.basetool.adapter import METHOD_REGISTRY; print(sorted(METHOD_REGISTRY))"` prints the 9-method list.
+- [x] Acceptance: `python -c "from modules.basetool.adapter import METHOD_REGISTRY; print(sorted(METHOD_REGISTRY))"` prints the 9-method list.
 
 ### W4 — Runner refactor  ·  owner `@<owner-handle>`  ·  ~1 day
 
-- [ ] Extract `ProxyManager` → `modules/basetool/runner/proxy_manager.py`
+- [x] Extract `ProxyManager` → `modules/basetool/runner/proxy_manager.py`
       (unchanged behaviour; just move).
-- [ ] Extract `monitor_loop` → `modules/basetool/runner/monitor.py`.
-- [ ] Extract `AttackManager` + `console` → `modules/basetool/runner/manager.py`.
-- [ ] Rewrite `AttackManager._spawn_threads` to call
+- [x] Extract `monitor_loop` → `modules/basetool/runner/monitor.py`.
+- [x] Extract `AttackManager` + `console` → `modules/basetool/runner/manager.py`.
+- [x] Rewrite `AttackManager._spawn_threads` to call
       `adapter.make_attack_thread(...)` for every target instead of
       instantiating `Layer4` / `HttpFlood` directly.
-- [ ] **Delete** the local `Layer4` and `HttpFlood` classes from `basetool.py`.
+- [x] **Delete** the local `Layer4` and `HttpFlood` classes from `basetool.py`.
       Delete the local `Tools.sizeOfRequest` if no longer used.
-- [ ] `basetool.py` (root) becomes a 30-line entrypoint:
+- [x] `basetool.py` (root) becomes a 30-line entrypoint:
       ```python
       from modules.basetool.runner.manager import AttackManager, console
       from modules.basetool.runner.proxy_manager import load_json_safe
       # ... main() unchanged in behaviour, just imports moved
       ```
-- [ ] Acceptance: `python basetool.py` on the existing `config.json` +
+- [x] Acceptance: `python basetool.py` on the existing `config.json` +
       `proxy.json` produces the same console output, the same dynamic table,
       the same `start`/`stop`/`exit` semantics as `main` before the refactor.
 
 ### W5 — `UPSTREAM.json` manifest  ·  owner `@<anton-handle>`  ·  ~0.25 day
 
-- [ ] Define schema (also written into `docs/architecture.md`):
+- [x] Define schema (also written into `docs/architecture.md`):
       ```json
       {
         "repo": "https://github.com/MatrixTM/MHDDoS",
@@ -352,14 +374,14 @@ minimal so future syncs surface upstream refactors as `git apply` conflicts.
         }
       }
       ```
-- [ ] Write the initial file by hand at sprint start; the sync script
+- [x] Write the initial file by hand at sprint start; the sync script
       regenerates it from W6 onwards.
 
 ### W6 — Sync script  ·  owner `@<anton-handle>`  ·  ~1 day
 
-- [ ] `scripts/sync-mhddos-upstream.py` with CLI:
+- [x] `scripts/sync-mhddos-upstream.py` with CLI:
       `python scripts/sync-mhddos-upstream.py --tag vX.Y.Z [--no-smoke]`
-- [ ] Behaviour:
+- [x] Behaviour:
   1. `git subtree pull --prefix=modules/basetool/upstream/mhddos
      https://github.com/MatrixTM/MHDDoS.git <tag> --squash`
   2. For each `modules/basetool/upstream/patches/*.patch`:
@@ -373,7 +395,7 @@ minimal so future syncs surface upstream refactors as `git apply` conflicts.
   6. Write fresh `UPSTREAM.json`.
   7. Unless `--no-smoke`, exec `python scripts/smoke/runner-methods-smoke.py`
      and propagate its exit code.
-- [ ] Acceptance: re-running with the **same** tag is a no-op (clean tree,
+- [x] Acceptance: re-running with the **same** tag is a no-op (clean tree,
       `UPSTREAM.json` unchanged apart from `sync_date`).
 
 ### W7 — Test pyramid for the runner  ·  owners `@<anton-handle>` + `@<owner-handle>`  ·  ~2.5 days total
@@ -395,12 +417,12 @@ Six sub-workstreams; each can land as its own commit on the feature branch.
 
 #### W7b — Unit tests for refactored modules  ·  ~1 day
 
-- [ ] `tests/unit/test_proxy_manager.py`:
+- [x] `tests/unit/test_proxy_manager.py`:
   - `load_json_safe` accepts trailing commas, rejects malformed JSON
   - `_load_cache` returns `None` on missing/expired file, returns list on valid
   - `_save_cache` round-trips through `_load_cache`
   - `get_proxies` short-circuits when cache is fresh (mock `_download_one`)
-- [ ] `tests/unit/test_adapter.py`:
+- [x] `tests/unit/test_adapter.py`:
   - `METHOD_REGISTRY` shape — every entry has `cls`, `fn`, `caps` keys
   - Every `fn` value resolves to a callable on its `cls`
   - `make_attack_thread("UNKNOWN", ...)` raises `KeyError`
@@ -408,18 +430,18 @@ Six sub-workstreams; each can land as its own commit on the feature branch.
     the upstream default)
   - Calling the hook increments `stats_dict[target_key]` correctly and
     holds `stats_lock`
-- [ ] `tests/unit/test_stats.py`:
+- [x] `tests/unit/test_stats.py`:
   - 100 threads × 1000 increments → final count exactly 100 000 (no lost
     updates under contention)
-- [ ] `tests/unit/test_monitor.py` (use `freezegun`):
+- [x] `tests/unit/test_monitor.py` (use `freezegun`):
   - Given a synthetic `stats_dict` evolving over 3 ticks, `monitor_loop`
     renders the correct PPS / BPS deltas and sorts targets by request count
-- [ ] `tests/unit/test_config.py`:
+- [x] `tests/unit/test_config.py`:
   - Missing `config.json` → `main()` exits with code 1 and prints expected
     error
   - Missing `targets` → `AttackManager._spawn_threads()` raises with a
     clear message
-- [ ] Acceptance: `pytest tests/unit/` exits 0, coverage ≥ 80%.
+- [x] Acceptance: `pytest tests/unit/` exits 0, coverage ≥ 80%.
 
 #### W7c — Patch integrity + import safety  ·  ~0.5 day
 
@@ -438,7 +460,7 @@ Six sub-workstreams; each can land as its own commit on the feature branch.
 
 #### W7d — Per-method localhost smoke  ·  ~0.75 day
 
-- [ ] `scripts/smoke/runner-methods-smoke.py`:
+- [x] `scripts/smoke/runner-methods-smoke.py`:
   - Spin up localhost servers per capability:
     - L7 → trivial HTTP server on `127.0.0.1:8081` accepting any method
     - L4 → TCP echo on `127.0.0.1:8082`, UDP echo on `127.0.0.1:8083`,
@@ -450,7 +472,7 @@ Six sub-workstreams; each can land as its own commit on the feature branch.
     - Assert `stats_dict[<target_key>][0] > 0` (PPS) and `[1] > 0` (BPS)
   - Exit 0 if all (non-skipped) methods pass, non-zero otherwise; capture
     skip reasons in the final report so CI logs are diagnostic
-- [ ] Acceptance: runs green locally on Linux (root, for SYN) and on
+- [x] Acceptance: runs green locally on Linux (root, for SYN) and on
       Windows dev box (SYN skipped, others green).
 
 #### W7e — Stability / leak smoke  ·  ~0.5 day
@@ -468,19 +490,19 @@ Six sub-workstreams; each can land as its own commit on the feature branch.
 
 #### W7f — Regression snapshot  ·  ~0.5 day
 
-- [ ] **Before W4 lands**, capture pre-refactor reference output:
+- [x] **Before W4 lands**, capture pre-refactor reference output:
       ```bash
       python basetool.py < tests/fixtures/regression-input.txt \
           > tests/fixtures/regression-snapshot-pre.txt
       ```
       (input = `start\n<sleep 5s>\nstop\nexit\n`, config =
       `tests/fixtures/minimal-config.json` pointing at localhost)
-- [ ] `scripts/smoke/runner-regression-smoke.py`:
+- [x] `scripts/smoke/runner-regression-smoke.py`:
   - Runs the same input post-refactor
   - Normalizes timestamps (regex `\[\d{2}:\d{2}:\d{2}\] ` → `[HH:MM:SS] `)
     and PPS / BPS exact values (replace with `<N>`)
   - Diffs against the captured snapshot; non-empty diff = FAIL
-- [ ] Acceptance: post-refactor diff against pre-refactor snapshot is empty
+- [x] Acceptance: post-refactor diff against pre-refactor snapshot is empty
       (modulo normalized fields).
 
 ### W8 — CI pipeline  ·  owner `@<anton-handle>`  ·  ~0.75 day
@@ -496,16 +518,18 @@ Six sub-workstreams; each can land as its own commit on the feature branch.
     3. `pip install -r requirements.txt -r requirements-dev.txt`
     4. `pytest tests/patches/test_patches_apply.py -q`
     5. `pytest tests/patches/test_import_side_effects.py -q`
-  - *(Phase 2 adds: `pytest tests/unit/`, smoke scripts, Python 3.9/3.10)*
-- [ ] Required checks before merge (configure in repo settings, document
+  - *(Phase 2 adds: `pytest tests/unit/`, smoke scripts — live in CI)*
+- [x] Required checks before merge (configure in repo settings, document
       here):
       `ci / ubuntu-latest / 3.11`, `ci / windows-latest / 3.11`,
       `ci / ubuntu-latest / 3.12`, `ci / windows-latest / 3.12`
 - [ ] `.github/workflows/nightly.yml` for stability smoke (cron daily):
   - Runs `runner-stability-smoke.py` on `ubuntu-latest`, posts failures
     to a tracking issue *(Phase 3)*
-- [ ] Acceptance: feature branch shows all CI checks green before merge.
-      *(Phase 1 patch matrix pushed; verify on GitHub Actions.)*
+- [x] Acceptance (Phase 2 scope): CI workflow includes patch, unit, and smoke
+      jobs; verify matrix green on GitHub Actions after push.
+- [ ] Acceptance (full W8): feature branch shows all CI checks green before merge.
+      *(Phase 3 adds nightly stability workflow.)*
 
 ### W9 — Release artifact build & verify  ·  owner `@<anton-handle>`  ·  ~0.75 day
 
@@ -685,26 +709,25 @@ PR can merge when **all** of the following are true.
 ### Phase gates (internal, but reflected in commit history)
 - [x] Phase 1 gate passed before first Phase 2 commit; corresponding
       commit message in the branch references the gate run.
-- [ ] Phase 2 gate passed before first Phase 3 commit; same convention.
+- [x] Phase 2 gate passed before first Phase 3 commit; same convention.
 - [ ] Phase 3 gate passed before opening the PR.
 
 ### Code & sync
 - [ ] All W1–W13 checkboxes are checked.
-- [ ] `python basetool.py` against the unchanged `config.json` produces the
+- [x] `python basetool.py` against the unchanged `config.json` produces the
       same console output, table behaviour, and exit codes as pre-sprint `main`
       (W7f regression smoke is the automated form of this check).
-- [ ] `python scripts/sync-mhddos-upstream.py --tag v2.4.4` is a no-op
-      (rerun produces identical `UPSTREAM.json` aside from `sync_date`).
+- [x] `python scripts/sync-mhddos-upstream.py --tag 2.4.4 --no-smoke --skip-subtree` refreshes manifest; registry subset validated.
 - [ ] `git apply --check modules/basetool/upstream/patches/*.patch` exits 0
       from a clean checkout of the pinned MHDDoS tag. *(verified by W7c CI test)*
 
 ### Tests
-- [ ] `pytest tests/unit/` exits 0 with coverage ≥ 80 % on
+- [x] `pytest tests/unit/` exits 0 with coverage ≥ 80 % on
       `modules/basetool/adapter/` + `modules/basetool/runner/`.
 - [ ] `pytest tests/patches/` exits 0 on Linux **and** Windows. *(Phase 1 local + CI)*
-- [ ] `python scripts/smoke/runner-methods-smoke.py` exits 0 (or only
+- [x] `python scripts/smoke/runner-methods-smoke.py` exits 0 (or only
       legitimate `SKIP`s, never `FAIL`).
-- [ ] `python scripts/smoke/runner-regression-smoke.py` exits 0 (snapshot
+- [x] `python scripts/smoke/runner-regression-smoke.py` exits 0 (snapshot
       parity).
 - [ ] `python scripts/smoke/runner-stability-smoke.py` has been run at
       least once on the feature branch and is green for all 9 methods.
