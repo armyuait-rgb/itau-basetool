@@ -469,12 +469,6 @@ class Layer4(Thread):
         if proxies:
             self._proxies = list(proxies)
 
-    def _raw_send(self, sock, payload):
-        return Tools.send(sock, payload)
-
-    def _raw_sendto(self, sock, payload, target):
-        return Tools.sendto(sock, payload, target)
-
         self.methods = {
             "UDP": self.UDP,
             "SYN": self.SYN,
@@ -489,6 +483,12 @@ class Layer4(Thread):
             "CONNECTION": self.CONNECTION,
             "MCBOT": self.MCBOT,
         }
+
+    def _raw_send(self, sock, payload):
+        return Tools.send(sock, payload)
+
+    def _raw_sendto(self, sock, payload, target):
+        return Tools.sendto(sock, payload, target)
 
     def run(self) -> None:
         if self._synevent: self._synevent.wait()
@@ -822,12 +822,6 @@ class HttpFlood(Thread):
         if not self._target.host[len(self._target.host) - 1].isdigit():
             self._raw_target = (self._host, (self._target.port or 80))
 
-    def _raw_send(self, sock, payload):
-        return Tools.send(sock, payload)
-
-    def _raw_sendto(self, sock, payload, target):
-        return Tools.sendto(sock, payload, target)
-
         self.methods = {
             "POST": self.POST,
             "CFB": self.CFB,
@@ -921,6 +915,12 @@ class HttpFlood(Thread):
                          'Sec-Gpc: 1\r\n'
                          'Pragma: no-cache\r\n'
                          'Upgrade-Insecure-Requests: 1\r\n')
+
+    def _raw_send(self, sock, payload):
+        return Tools.send(sock, payload)
+
+    def _raw_sendto(self, sock, payload, target):
+        return Tools.sendto(sock, payload, target)
 
     def select(self, name: str) -> None:
         self.SENT_FLOOD = self.GET
