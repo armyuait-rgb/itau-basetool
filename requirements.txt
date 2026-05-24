@@ -2,3 +2,9 @@ PyRoxy @ git+https://github.com/MHProDev/PyRoxy.git
 impacket
 requests
 yarl
+cloudscraper==1.2.71
+certifi==2024.7.4
+dnspython==2.6.1
+psutil>=5.9.3
+icmplib>=2.1.1
+pyasn1==0.4.8

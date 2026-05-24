@@ -1,0 +1,36 @@
+--- a/start.py
++++ b/start.py
+@@ -95,12 +95,19 @@
+             's5.tor-gateways.de'
+         ]
+ 
+-with open(__dir__ / "config.json") as f:
+-    con = load(f)
+-
+-with socket(AF_INET, SOCK_DGRAM) as s:
+-    s.connect(("8.8.8.8", 80))
+-    __ip__ = s.getsockname()[0]
++con = None
++__ip__ = None
++
++
++def _ensure_runtime_config() -> None:
++    global con, __ip__
++    if con is None:
++        with open(__dir__ / "config.json") as f:
++            con = load(f)
++    if __ip__ is None:
++        with socket(AF_INET, SOCK_DGRAM) as s:
++            s.connect(("8.8.8.8", 80))
++            __ip__ = s.getsockname()[0]
+ 
+ 
+ class bcolors:
+@@ -1689,6 +1696,7 @@
+ 
+ 
+ if __name__ == '__main__':
++    _ensure_runtime_config()
+     with suppress(KeyboardInterrupt):
+         with suppress(IndexError):
+             one = argv[1].upper()
