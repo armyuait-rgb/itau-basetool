@@ -33,11 +33,11 @@ pytest tests/patches/test_import_side_effects.py -q
 ## Unit tests
 
 ```bash
-pytest tests/unit/ -q
+pytest tests/unit/ -q --cov=modules/basetool/adapter --cov=modules/basetool/runner --cov-report=term-missing --cov-fail-under=80
 ```
 
-Coverage gate (configured in `pyproject.toml`): ≥ 80 % on
-`modules/basetool/adapter/` and `modules/basetool/runner/`.
+Coverage gate (≥ 80 % on adapter + runner) applies to unit tests only; patch
+and smoke steps run without the global coverage threshold.
 
 ## Smoke tests
 
