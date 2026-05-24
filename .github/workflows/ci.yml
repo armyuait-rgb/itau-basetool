@@ -8,8 +8,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  patches:
-    name: patches / ${{ matrix.os }} / py${{ matrix.python-version }}
+  test:
+    name: test / ${{ matrix.os }} / py${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -36,3 +36,12 @@ jobs:
 
       - name: Verify upstream import side effects
         run: pytest tests/patches/test_import_side_effects.py -q
+
+      - name: Run unit tests with coverage gate
+        run: pytest tests/unit/ -q
+
+      - name: Run per-method localhost smoke
+        run: python scripts/smoke/runner-methods-smoke.py
+
+      - name: Run regression snapshot smoke
+        run: python scripts/smoke/runner-regression-smoke.py
