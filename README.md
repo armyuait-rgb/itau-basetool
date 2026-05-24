@@ -13,9 +13,10 @@
 - **Гнучка конфігурація**: `config.json` та `proxy.json`.
 - **User‑Agent / Referer**: випадковий вибір із заданого списку, або стандартні значення.
 
-> **MHDDoS upstream integration (Phase 2):** attacks run through the adapter in
+> **MHDDoS upstream integration (Phase 3):** attacks run through the adapter in
 > `modules/basetool/adapter/` over vendored [MatrixTM/MHDDoS](https://github.com/MatrixTM/MHDDoS)
 > tag `2.4.4`. Runner orchestration lives in `modules/basetool/runner/`.
+> Release tarballs are built with `scripts/release/build-release-artifact.py`.
 > Details: [docs/architecture.md](docs/architecture.md).
 
 ## Вимоги
@@ -36,14 +37,25 @@ cd BaseTool
 pip install -r requirements.txt
 ```
 
-## Тестування (Phase 2)
+## Тестування (Phase 3)
 
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt
 pytest tests/patches/
-pytest tests/unit/
+pytest tests/unit/ -q --cov=modules/basetool/adapter --cov=modules/basetool/runner --cov-report=term-missing --cov-fail-under=80
 python scripts/smoke/runner-methods-smoke.py
 python scripts/smoke/runner-regression-smoke.py
+python scripts/smoke/runner-stability-smoke.py --duration 15
+python scripts/release/build-release-artifact.py
+python scripts/release/verify-release-artifact.py
+python scripts/release/simulate-downstream-stage.py
+```
+
+## Синхронізація upstream
+
+```bash
+python scripts/sync-mhddos-upstream.py --tag 2.4.4
+python scripts/sync-mhddos-upstream.py --tag 2.4.4 --no-smoke --skip-subtree
 ```
 
 Докладніше: [docs/testing.md](docs/testing.md).
@@ -54,7 +66,13 @@ python scripts/smoke/runner-regression-smoke.py
 - requirements-dev.txt - Залежності для тестів (pytest).
 - config.json - Файл конфігурації. Тут зберігаються налаштування за замовчуванням.
 - proxy.json - База джерел проксі-серверів.
+- modules/basetool/adapter/ - Адаптер атак і METHOD_REGISTRY.
+- modules/basetool/runner/ - Оркестрація раннера (manager, monitor, proxy).
+- modules/basetool/UPSTREAM.json - Зафіксований upstream manifest.
 - modules/basetool/upstream/ - Vendored MHDDoS upstream та патчі.
+- scripts/sync-mhddos-upstream.py - Синхронізація upstream і manifest.
+- scripts/smoke/ - Localhost smoke harnesses.
+- scripts/release/ - Release tarball build, verify, and downstream stage simulation.
 - docs/architecture.md - Архітектура upstream integration.
 - docs/testing.md - Команди тестування.
 - README.md - Документація проекту.
@@ -74,9 +92,10 @@ It supports TCP, UDP, SYN methods at L4 and GET, POST, STRESS, SLOW, GSB, BYPASS
 - **Flexible configuration**: `config.json` and `proxy.json`
 - **User-Agent / Referer**: random selection from a defined list, or default values
 
-> **MHDDoS upstream integration (Phase 2):** attacks run through the adapter in
+> **MHDDoS upstream integration (Phase 3):** attacks run through the adapter in
 > `modules/basetool/adapter/` over vendored [MatrixTM/MHDDoS](https://github.com/MatrixTM/MHDDoS)
 > tag `2.4.4`. Runner orchestration lives in `modules/basetool/runner/`.
+> Release tarballs are built with `scripts/release/build-release-artifact.py`.
 > See [docs/architecture.md](docs/architecture.md).
 
 ## Requirements
@@ -97,14 +116,25 @@ cd BaseTool
 pip install -r requirements.txt
 ```
 
-## Testing (Phase 2)
+## Testing (Phase 3)
 
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt
 pytest tests/patches/
-pytest tests/unit/
+pytest tests/unit/ -q --cov=modules/basetool/adapter --cov=modules/basetool/runner --cov-report=term-missing --cov-fail-under=80
 python scripts/smoke/runner-methods-smoke.py
 python scripts/smoke/runner-regression-smoke.py
+python scripts/smoke/runner-stability-smoke.py --duration 15
+python scripts/release/build-release-artifact.py
+python scripts/release/verify-release-artifact.py
+python scripts/release/simulate-downstream-stage.py
+```
+
+## Upstream sync
+
+```bash
+python scripts/sync-mhddos-upstream.py --tag 2.4.4
+python scripts/sync-mhddos-upstream.py --tag 2.4.4 --no-smoke --skip-subtree
 ```
 
 See [docs/testing.md](docs/testing.md) for the full test pyramid.
@@ -115,7 +145,13 @@ See [docs/testing.md](docs/testing.md) for the full test pyramid.
 - requirements-dev.txt — test dependencies (pytest)
 - config.json — configuration file containing default settings
 - proxy.json — proxy source database
+- modules/basetool/adapter/ — attack adapter and METHOD_REGISTRY
+- modules/basetool/runner/ — runner orchestration (manager, monitor, proxy)
+- modules/basetool/UPSTREAM.json — pinned upstream manifest
 - modules/basetool/upstream/ — vendored MHDDoS upstream and patches
+- scripts/sync-mhddos-upstream.py — upstream sync and manifest refresh
+- scripts/smoke/ — localhost smoke harnesses
+- scripts/release/ — release tarball build, verify, and downstream stage simulation
 - docs/architecture.md — upstream integration architecture
 - docs/testing.md — testing commands
 - README.md — project documentation

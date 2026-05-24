@@ -1,8 +1,8 @@
 # BaseTool runner testing
 
-Test infrastructure for the MHDDoS upstream integration. **Phase 2** adds unit
-tests, per-method smoke, and regression snapshot parity on top of the Phase 1
-patch gates.
+Test infrastructure for the MHDDoS upstream integration. **Phase 3** adds
+stability smoke, release artifact verification, and downstream staging
+simulation on top of the Phase 2 cutover gates.
 
 Architecture context: [docs/architecture.md](architecture.md).
 
@@ -10,6 +10,20 @@ Architecture context: [docs/architecture.md](architecture.md).
 
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt
+```
+
+## Phase 3 gate (release check)
+
+```bash
+pytest tests/patches/
+pytest tests/unit/
+python scripts/smoke/runner-methods-smoke.py
+python scripts/smoke/runner-regression-smoke.py
+python scripts/smoke/runner-stability-smoke.py --duration 15
+python scripts/release/build-release-artifact.py
+python scripts/release/verify-release-artifact.py
+python scripts/release/simulate-downstream-stage.py
+BASETOOL_JSON=1 python basetool.py --help
 ```
 
 ## Phase 2 gate (full cutover check)
@@ -57,6 +71,39 @@ Regression smoke stages `tests/fixtures/minimal-config.json` into a temp dir
 and sets `BASETOOL_RUNTIME_DIR` so the runner under test does not depend on the
 repo's default `config.json`.
 
+Stability smoke (long-run leak / thread drift check):
+
+```bash
+python scripts/smoke/runner-stability-smoke.py
+python scripts/smoke/runner-stability-smoke.py --method GET --duration 15
+```
+
+## Release verification
+
+Build a runner tarball and checksum:
+
+```bash
+python scripts/release/build-release-artifact.py
+python scripts/release/build-release-artifact.py --from-tag
+```
+
+Verify the packed artifact and run per-method smoke against the extracted tree:
+
+```bash
+python scripts/release/verify-release-artifact.py
+python scripts/release/verify-release-artifact.py dist/basetool-runner-dev-<sha>.tar.gz
+```
+
+Simulate downstream staging and auto-update consumption:
+
+```bash
+python scripts/release/simulate-downstream-stage.py
+```
+
+On Linux/macOS the simulator includes a SIGTERM clean-shutdown check. On Windows
+that check is skipped because `TerminateProcess` does not invoke Python signal
+handlers; release CI runs the full check on `ubuntu-latest`.
+
 ## Test pyramid
 
 | Layer | Location | When it runs | Phase |
@@ -65,16 +112,24 @@ repo's default `config.json`.
 | Unit | `tests/unit/` | Every push/PR (CI) | **2 — live** |
 | Methods smoke | `scripts/smoke/runner-methods-smoke.py` | Every push/PR (CI) | **2 — live** |
 | Regression snapshot | `scripts/smoke/runner-regression-smoke.py` | Every push/PR (CI) | **2 — live** |
-| Stability / leak | `scripts/smoke/runner-stability-smoke.py` | Nightly | 3 |
-| Release artifact | `scripts/release/verify-release-artifact.py` | Tag push | 3 |
-| Downstream stage | `scripts/release/simulate-downstream-stage.py` | Tag push | 3 |
+| Stability / leak | `scripts/smoke/runner-stability-smoke.py` | Nightly + tag push | **3 — live** |
+| Release artifact | `scripts/release/verify-release-artifact.py` | Tag push | **3 — live** |
+| Downstream stage | `scripts/release/simulate-downstream-stage.py` | Tag push | **3 — live** |
 
 ## CI
 
-Workflow: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
+Workflows:
 
-Matrix: Ubuntu + Windows × Python 3.11 + 3.12. Each cell runs patch tests,
-unit tests, methods smoke, and regression smoke.
+- [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) — patch, unit, and smoke on every push/PR
+- [`.github/workflows/nightly.yml`](../.github/workflows/nightly.yml) — daily stability smoke
+- [`.github/workflows/release.yml`](../.github/workflows/release.yml) — tag push release gate
+
+`ci.yml` matrix: Ubuntu + Windows × Python 3.11 + 3.12. Each cell runs patch
+tests, unit tests, methods smoke, and regression smoke.
+
+`release.yml` runs the full CI matrix, stability smoke, build, verify,
+downstream simulation, and publishes a GitHub release. Tags containing `smoke`
+are published as prereleases.
 
 ## Maintenance commands
 

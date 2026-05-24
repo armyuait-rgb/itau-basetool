@@ -1,10 +1,10 @@
 # BaseTool runner architecture
 
 This document tracks the MHDDoS upstream integration on branch
-`feature/mhddos-upstream-integration`. **Phase 2 is complete**: the adapter,
-runner modules, upstream manifest, sync script, unit tests, and smoke gates are
-live. The root [basetool.py](../basetool.py) entrypoint is a thin wrapper over
-`modules/basetool/runner/`.
+`feature/mhddos-upstream-integration`. **Phase 3 is complete**: release
+artifact build/verify, downstream staging simulation, stability smoke,
+structured JSON telemetry, and tag-driven release workflows are live alongside
+the Phase 2 adapter/runner cutover.
 
 See also [docs/testing.md](testing.md) for commands and [docs/sprints/2026-05-24-mhddos-upstream-integration.md](sprints/2026-05-24-mhddos-upstream-integration.md) for the full sprint plan.
 
@@ -43,11 +43,18 @@ itau-basetool/
 ├── scripts/
 │   ├── sync-mhddos-upstream.py
 │   ├── dev/generate-upstream-patches.py
-│   └── smoke/
-│       ├── runner-methods-smoke.py
-│       └── runner-regression-smoke.py
+│   ├── smoke/
+│   │   ├── runner-methods-smoke.py
+│   │   ├── runner-regression-smoke.py
+│   │   └── runner-stability-smoke.py
+│   └── release/
+│       ├── build-release-artifact.py
+│       ├── verify-release-artifact.py
+│       └── simulate-downstream-stage.py
 ├── .github/workflows/
-│   └── ci.yml                          # patches + unit + smoke
+│   ├── ci.yml
+│   ├── nightly.yml
+│   └── release.yml
 └── docs/
     ├── architecture.md                 ← this file
     └── testing.md
@@ -59,7 +66,7 @@ itau-basetool/
 |--------|------|
 | `modules/basetool/adapter/methods.py` | Maps the nine allowlisted methods to upstream `HttpFlood` / `Layer4` classes. Instantiates attack threads and monkey-patches `_raw_send` / `_raw_sendto` (plus `BYPASS`) to record per-target stats. |
 | `modules/basetool/runner/manager.py` | Parses `config.json`, spawns adapter threads, drives the console (`start` / `stop` / `exit`). |
-| `modules/basetool/runner/monitor.py` | Renders the dynamic PPS/BPS table. |
+| `modules/basetool/runner/monitor.py` | Renders the dynamic PPS/BPS table and optional JSON telemetry (`BASETOOL_JSON=1` or `--json`). |
 | `modules/basetool/runner/proxy_manager.py` | Downloads, verifies, and caches proxies. |
 | `modules/basetool/runner/runtime.py` | Resolves the runtime directory (`basetool.py` parent, packaged `cwd`, or `BASETOOL_RUNTIME_DIR` override). |
 
@@ -121,20 +128,23 @@ Stats contract: `stats_dict[target_key] = [packets, bytes]`, unchanged from pre-
 Patch integrity is enforced by `tests/patches/test_patches_apply.py`. Import
 safety is enforced by `tests/patches/test_import_side_effects.py`.
 
-## CI (Phase 2 scope)
+## CI (Phase 3 scope)
 
-Workflow: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
+Workflows:
 
-| Trigger | Branches |
-|---------|----------|
-| `push` | `main`, `feature/mhddos-upstream-integration` |
-| `pull_request` | `main` |
-| `workflow_dispatch` | any |
+| Workflow | Trigger | Scope |
+|----------|---------|-------|
+| `ci.yml` | push/PR | patch, unit, methods smoke, regression smoke |
+| `nightly.yml` | cron + manual | stability smoke on Ubuntu |
+| `release.yml` | tag `v*.*.*` | full CI matrix, stability, build, verify, downstream sim, GitHub release |
 
-Matrix: **Ubuntu + Windows** × **Python 3.11 + 3.12**.
+Matrix in `ci.yml` and `release.yml`: **Ubuntu + Windows** × **Python 3.11 + 3.12**.
 
-Each matrix cell runs patch tests, unit tests (≥ 80 % coverage on adapter +
+Each CI matrix cell runs patch tests, unit tests (≥ 80 % coverage on adapter +
 runner), per-method smoke, and regression snapshot smoke.
+
+Tag pushes run the release pipeline. Tags containing `smoke` publish as
+prereleases so downstream auto-update ignores them.
 
 ## Phase gates
 
@@ -142,18 +152,59 @@ runner), per-method smoke, and regression snapshot smoke.
 |-------|--------|------|
 | 1 — Foundation | **Complete** | `pytest tests/patches/` green; CI on branch |
 | 2 — Cutover | **Complete** | Phase 1 plus `pytest tests/unit/`, methods smoke, regression smoke |
-| 3 — Release | Planned | Verified tarball and downstream stage simulation |
+| 3 — Release | **Complete** | Verified tarball and downstream stage simulation |
 
-Phase 2 verification:
+Phase 3 verification:
 
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt
 pytest tests/patches/
-pytest tests/unit/
+pytest tests/unit/ -q --cov=modules/basetool/adapter --cov=modules/basetool/runner --cov-report=term-missing --cov-fail-under=80
 python scripts/smoke/runner-methods-smoke.py
 python scripts/smoke/runner-regression-smoke.py
-python scripts/sync-mhddos-upstream.py --tag 2.4.4 --no-smoke --skip-subtree
+python scripts/smoke/runner-stability-smoke.py --duration 15
+python scripts/release/build-release-artifact.py
+python scripts/release/verify-release-artifact.py
+python scripts/release/simulate-downstream-stage.py
 ```
+
+## Release tarball layout
+
+`scripts/release/build-release-artifact.py` writes:
+
+```
+dist/basetool-runner-<version>.tar.gz
+dist/basetool-runner-<version>.tar.gz.sha256
+```
+
+Tarball contents:
+
+- `basetool.py` at the archive root
+- `modules/basetool/` adapter, runner, upstream vendor tree, and `UPSTREAM.json`
+- `config.json`, `proxy.json`, `requirements.txt`, `README.md`, `THIRD_PARTY_NOTICES.md`
+
+Excluded: `tests/`, `docs/`, `.github/`, `cache/`, `__pycache__/`.
+
+`<version>` is the git tag when `--from-tag` is passed, otherwise `dev-<sha>`.
+
+## Downstream stager contract
+
+This is the stable surface `itarmykit-basetool` may rely on when consuming a
+runner release tarball:
+
+| Invariant | Detail |
+|-----------|--------|
+| Entry point | `python basetool.py` with `config.json` and `proxy.json` available via `BASETOOL_RUNTIME_DIR` or runner root |
+| CLI | No required args; `--help` exits 0; `--json` or `BASETOOL_JSON=1` adds structured monitor lines |
+| Console | Accepts `start`, `stop`, `exit` on stdin; auto-starts on launch |
+| Shutdown | Clean exit code 0 on `exit` and on `SIGTERM` |
+| Disk writes | Only under `cache/` relative to the runtime directory |
+| Stats | `stats_dict[target_key] = [packets, bytes]` |
+| JSON telemetry | One JSON object per monitor tick on stdout when enabled; table renders on stderr in JSON mode |
+| Layout | `basetool.py` at tarball root; internal modules under `modules/basetool/` |
+| Release promotion | Failed release workflows publish `prerelease=true`; downstream auto-update must ignore prereleases |
+
+Verification harness: `scripts/release/simulate-downstream-stage.py`.
 
 ## Bumping upstream
 
@@ -170,9 +221,12 @@ python scripts/sync-mhddos-upstream.py --tag <tag>
 If patches fail to apply or import-safety tests regress, resolve conflicts
 before merging the bump.
 
-## Deferred (Phase 3)
+## Structured output
 
-- `scripts/smoke/runner-stability-smoke.py` and `nightly.yml`
-- Release artifact build/verify scripts and `release.yml`
-- Downstream stager contract documentation
-- `BASETOOL_JSON=1` structured output mode
+Set `BASETOOL_JSON=1` or pass `--json` to emit one JSON object per monitor tick
+on stdout while rendering the human-readable PPS/BPS table on stderr (default
+mode keeps both on stdout):
+
+```json
+{"ts": "2026-06-01T12:00:00Z", "pps": 1234, "bps": 567890, "targets": {"127.0.0.1:8081": {"req": 6170, "bytes": 2839450}}}
+```

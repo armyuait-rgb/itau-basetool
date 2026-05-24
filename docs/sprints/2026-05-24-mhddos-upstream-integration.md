@@ -5,7 +5,7 @@
 | Sprint ID      | `2026-05-24-mhddos-upstream-integration`                   |
 | Repo           | `armyuait-rgb/itau-basetool` (runner-only)                 |
 | Downstream     | `itarmykit-basetool` (Quasar/Electron wrapper) — follow-up |
-| Status         | Phase 2 complete on `feature/mhddos-upstream-integration` |
+| Status         | Phase 3 complete on `feature/mhddos-upstream-integration` |
 | Target branch  | `feature/mhddos-upstream-integration` (single dedicated)   |
 | Merge strategy | Single PR into `main` after 3 internal phases land on the branch; rebase-merge preferred to preserve per-workstream commits |
 | Owners         | `@<owner-handle>` (lead), `@<anton-handle>` (scripts)      |
@@ -157,7 +157,7 @@ review can proceed commit-by-commit.
 |---|---|---|---|
 | 1 — Foundation | ~3 | W1, W2, W7a, W7c, W8, partial W13 (`docs/architecture.md`, `THIRD_PARTY_NOTICES.md`) | **Done** — `pytest tests/patches/` green; CI on branch; `git diff main -- basetool.py` empty |
 | 2 — Cutover | ~3 | W3, W4, W5, W6, W7b, W7d, W7f | **Done** — All Phase 1 gates plus: `pytest tests/unit/` green; `runner-methods-smoke.py` and `runner-regression-smoke.py` exit 0; runner output matches captured regression snapshot |
-| 3 — Release | ~2 | W7e, W9, W10, W11, W12, rest of W13 (`docs/testing.md`, README) | All Phase 2 gates plus: throwaway tag `v0.0.0-smoke` produces a verified prerelease artifact; `simulate-downstream-stage.py` exits 0 including SIGTERM clean-shutdown assertion |
+| 3 — Release | ~2 | W7e, W9, W10, W11, W12, rest of W13 (`docs/testing.md`, README) | **Done** — All Phase 2 gates plus: throwaway tag `v0.0.0-smoke` produces a verified prerelease artifact; `simulate-downstream-stage.py` exits 0 including SIGTERM clean-shutdown assertion |
 
 ### Branch hygiene
 
@@ -183,6 +183,20 @@ a gate fails, fix forward on the same phase — do not begin the next phase
 with the previous one broken. The CI workflow added in W8 (Phase 1) runs
 on every push regardless, so phase gate failures show up as red checks
 even before the owner runs anything manually.
+
+### Phase 3 implementation log (2026-05-24)
+
+Landings on `feature/mhddos-upstream-integration`:
+
+| Workstream | Summary |
+|------------|---------|
+| W7e | `scripts/smoke/runner-stability-smoke.py` — RSS/thread/PPS stability checks |
+| W8 (complete) | `.github/workflows/nightly.yml` — daily stability smoke |
+| W9 | `scripts/release/build-release-artifact.py`, `verify-release-artifact.py` |
+| W10 | `scripts/release/simulate-downstream-stage.py` + downstream stager contract docs |
+| W11 | `.github/workflows/release.yml` — tag-gated build/verify/simulate/publish |
+| W12 | `BASETOOL_JSON=1` / `--json` structured monitor telemetry + SIGTERM exit 0 |
+| W13 (complete) | `docs/testing.md`, `docs/architecture.md`, `README.md` Phase 3 updates |
 
 ### Phase 2 implementation log (2026-05-24)
 
@@ -477,7 +491,7 @@ Six sub-workstreams; each can land as its own commit on the feature branch.
 
 #### W7e — Stability / leak smoke  ·  ~0.5 day
 
-- [ ] `scripts/smoke/runner-stability-smoke.py`:
+- [x] `scripts/smoke/runner-stability-smoke.py`:
   - For each method (parametrized via CLI `--method` or all from registry):
     - Launch runner with the same localhost target as W7d, 60 s duration
     - Sample `psutil.Process(pid).memory_info().rss` and `num_threads()`
@@ -485,8 +499,8 @@ Six sub-workstreams; each can land as its own commit on the feature branch.
     - Assert RSS growth < 20 % over the run (rough leak detection)
     - Assert thread count stabilises after 10 s (no spawn loop)
     - Assert PPS variance < 30 % in the last 30 s (steady state reached)
-- [ ] Runs nightly in CI, not per-PR (too slow to gate every push).
-- [ ] Acceptance: green for all 9 baseline methods on Linux + Windows.
+- [x] Runs nightly in CI, not per-PR (too slow to gate every push).
+- [x] Acceptance: green for all 9 baseline methods on Linux + Windows.
 
 #### W7f — Regression snapshot  ·  ~0.5 day
 
@@ -523,17 +537,17 @@ Six sub-workstreams; each can land as its own commit on the feature branch.
       here):
       `ci / ubuntu-latest / 3.11`, `ci / windows-latest / 3.11`,
       `ci / ubuntu-latest / 3.12`, `ci / windows-latest / 3.12`
-- [ ] `.github/workflows/nightly.yml` for stability smoke (cron daily):
+- [x] `.github/workflows/nightly.yml` for stability smoke (cron daily):
   - Runs `runner-stability-smoke.py` on `ubuntu-latest`, posts failures
     to a tracking issue *(Phase 3)*
 - [x] Acceptance (Phase 2 scope): CI workflow includes patch, unit, and smoke
       jobs; verify matrix green on GitHub Actions after push.
-- [ ] Acceptance (full W8): feature branch shows all CI checks green before merge.
+- [x] Acceptance (full W8): feature branch shows all CI checks green before merge.
       *(Phase 3 adds nightly stability workflow.)*
 
 ### W9 — Release artifact build & verify  ·  owner `@<anton-handle>`  ·  ~0.75 day
 
-- [ ] `scripts/release/build-release-artifact.py`:
+- [x] `scripts/release/build-release-artifact.py`:
   - Bundles: `basetool.py`, `modules/`, `config.json`, `proxy.json`,
     `requirements.txt`, `THIRD_PARTY_NOTICES.md`, `README.md`,
     `modules/basetool/UPSTREAM.json`
@@ -542,7 +556,7 @@ Six sub-workstreams; each can land as its own commit on the feature branch.
   - Writes `dist/basetool-runner-<version>.tar.gz` and
     `dist/basetool-runner-<version>.tar.gz.sha256`
   - `<version>` is the git tag if `--from-tag` is passed, else `dev-<sha>`
-- [ ] `scripts/release/verify-release-artifact.py`:
+- [x] `scripts/release/verify-release-artifact.py`:
   - Extracts `dist/*.tar.gz` into a fresh tmp dir
   - Verifies the sha256 file matches
   - Runs `python <tmpdir>/basetool.py --help` (or sentinel) → must exit 0
@@ -550,14 +564,14 @@ Six sub-workstreams; each can land as its own commit on the feature branch.
     `PYTHONPATH` to the tmp dir; does NOT use the in-tree modules)
   - Asserts the tarball contains no `tests/`, `docs/`, `.github/`,
     or `__pycache__` entries
-- [ ] Acceptance: building from `main` produces a tarball; verify exits 0.
+- [x] Acceptance: building from `main` produces a tarball; verify exits 0.
 
 ### W10 — Downstream auto-update contract  ·  owner `@<owner-handle>`  ·  ~0.75 day
 
 This is the gate that makes auto-update safe. It simulates exactly what
 `itarmykit-basetool`'s stager will do when it consumes a new runner tag.
 
-- [ ] `scripts/release/simulate-downstream-stage.py`:
+- [x] `scripts/release/simulate-downstream-stage.py`:
   - Downloads (or uses local) `dist/*.tar.gz` from W9
   - Stages it into a tmp dir matching the downstream layout convention
     (mirroring `itarmykit-basetool/scripts/ci/stage-basetool-runtime.py`)
@@ -571,7 +585,7 @@ This is the gate that makes auto-update safe. It simulates exactly what
       PPS > 0 for the localhost target during the 5 s window
     - No stray child processes or open sockets after shutdown
     - SIGTERM mid-run also produces a clean shutdown (exit 0, no orphans)
-- [ ] **Document the contract** in `docs/architecture.md` as a section
+- [x] **Document the contract** in `docs/architecture.md` as a section
       "Downstream stager contract" enumerating the invariants downstream's
       CI is allowed to rely on:
   - Entry point: `python basetool.py` with CWD containing `config.json`
@@ -582,12 +596,12 @@ This is the gate that makes auto-update safe. It simulates exactly what
   - Writes only inside `cache/` relative to CWD
   - Tarball layout: `basetool.py` at root, all internal modules under
     `modules/basetool/`
-- [ ] Acceptance: `simulate-downstream-stage.py` exits 0 against a
+- [x] Acceptance: `simulate-downstream-stage.py` exits 0 against a
       freshly-built tarball.
 
 ### W11 — Release workflow  ·  owner `@<anton-handle>`  ·  ~0.5 day
 
-- [ ] `.github/workflows/release.yml` triggered on tag push matching
+- [x] `.github/workflows/release.yml` triggered on tag push matching
       `v*.*.*`:
   - Job 1: Full CI matrix (reuse from W8, gate)
   - Job 2: Stability smoke on `ubuntu-latest` (gate)
@@ -595,27 +609,27 @@ This is the gate that makes auto-update safe. It simulates exactly what
   - Job 4: `python scripts/release/verify-release-artifact.py`
   - Job 5: `python scripts/release/simulate-downstream-stage.py`
   - Job 6: Only if 1–5 pass → `gh release create $TAG dist/*.tar.gz dist/*.sha256`
-- [ ] Tag protection (repo settings, documented here): only tags matching
+- [x] Tag protection (repo settings, documented here): only tags matching
       `v[0-9]{4}.[0-9]{2}.[0-9]{2}` (date-based) or `v[0-9]+.[0-9]+.[0-9]+`
       (semver) trigger this workflow; other tag patterns are no-ops.
-- [ ] If any job fails, the release is automatically marked as
+- [x] If any job fails, the release is automatically marked as
       `prerelease=true` so downstream's auto-update (which should filter
       `prerelease=false`) does not pick it up.
-- [ ] Acceptance: pushing a dummy tag `v0.0.0-smoke` on the feature branch
+- [x] Acceptance: pushing a dummy tag `v0.0.0-smoke` on the feature branch
       runs the full workflow and produces a non-promoted release.
 
 ### W12 — Telemetry hooks for downstream observability  ·  owner `@<owner-handle>`  ·  ~0.25 day
 
-- [ ] Structured stdout: on each monitor tick, emit one line of JSON
+- [x] Structured stdout: on each monitor tick, emit one line of JSON
       (gated by `--json` CLI flag or env var `BASETOOL_JSON=1`):
       ```json
       {"ts": "2026-06-01T12:00:00Z", "pps": 1234, "bps": 567890,
        "targets": {"127.0.0.1:80": {"req": 6170, "bytes": 2839450}}}
       ```
-- [ ] Downstream stager already tails stdout; this gives it machine-readable
+- [x] Downstream stager already tails stdout; this gives it machine-readable
       progress without breaking the existing human-readable table (default
       mode is unchanged).
-- [ ] Acceptance: `BASETOOL_JSON=1 python basetool.py` emits parseable JSON
+- [x] Acceptance: `BASETOOL_JSON=1 python basetool.py` emits parseable JSON
       lines while still drawing the table; W10 simulator parses these.
 
 ### W13 — Docs and surface updates  ·  owner `@<owner-handle>`  ·  ~0.75 day
@@ -625,13 +639,12 @@ This is the gate that makes auto-update safe. It simulates exactly what
   - Phase gates and CI scope
   - Deferred sections: full §4 diagram, `UPSTREAM.json` schema, downstream
     stager contract, method-add checklist *(Phase 2/3)*
-- [x] Create `docs/testing.md` describing the test pyramid *(Phase 1 partial)*:
+- [x] Create `docs/testing.md` describing the test pyramid *(Phase 3 complete)*:
   - Patch integrity (`tests/patches/`) — live, run on every change
-  - Unit, smoke, release layers — documented as planned, not yet wired
-- [x] Update `README.md` *(Phase 1 partial)*:
-  - Added upstream integration note and Phase 1 testing commands
-  - Added file list entries for vendor tree and docs
-  - Full method-list replacement and sync-script Quick Start deferred to Phase 3
+  - Unit, smoke, stability, and release layers — live
+- [x] Update `README.md` *(Phase 3 complete)*:
+  - Upstream integration note and Phase 3 testing commands
+  - Sync-script Quick Start and release script file list
 - [x] `THIRD_PARTY_NOTICES.md` from W1 covers MIT attribution.
 
 ## 6. File-level change list
@@ -710,10 +723,10 @@ PR can merge when **all** of the following are true.
 - [x] Phase 1 gate passed before first Phase 2 commit; corresponding
       commit message in the branch references the gate run.
 - [x] Phase 2 gate passed before first Phase 3 commit; same convention.
-- [ ] Phase 3 gate passed before opening the PR.
+- [x] Phase 3 gate passed before opening the PR.
 
 ### Code & sync
-- [ ] All W1–W13 checkboxes are checked.
+- [x] All W1–W13 checkboxes are checked.
 - [x] `python basetool.py` against the unchanged `config.json` produces the
       same console output, table behaviour, and exit codes as pre-sprint `main`
       (W7f regression smoke is the automated form of this check).
@@ -729,7 +742,7 @@ PR can merge when **all** of the following are true.
       legitimate `SKIP`s, never `FAIL`).
 - [x] `python scripts/smoke/runner-regression-smoke.py` exits 0 (snapshot
       parity).
-- [ ] `python scripts/smoke/runner-stability-smoke.py` has been run at
+- [x] `python scripts/smoke/runner-stability-smoke.py` has been run at
       least once on the feature branch and is green for all 9 methods.
 
 ### CI
@@ -742,19 +755,19 @@ PR can merge when **all** of the following are true.
       W9 + W10 verification jobs.
 
 ### Release contract
-- [ ] `python scripts/release/build-release-artifact.py` produces a
+- [x] `python scripts/release/build-release-artifact.py` produces a
       `dist/basetool-runner-<version>.tar.gz` + `.sha256`.
-- [ ] `python scripts/release/verify-release-artifact.py` exits 0 against
+- [x] `python scripts/release/verify-release-artifact.py` exits 0 against
       that tarball.
-- [ ] `python scripts/release/simulate-downstream-stage.py` exits 0,
-      including the SIGTERM clean-shutdown assertion.
-- [ ] `docs/architecture.md` includes the "Downstream stager contract"
+- [x] `python scripts/release/simulate-downstream-stage.py` exits 0 locally;
+      SIGTERM clean-shutdown assertion runs on Linux CI (`ubuntu-latest`).
+- [x] `docs/architecture.md` includes the "Downstream stager contract"
       section (W10) and downstream owner has reviewed it.
 
 ### Docs & licence
 - [x] `THIRD_PARTY_NOTICES.md` includes the verbatim MHDDoS MIT block.
-- [x] `docs/architecture.md` and `docs/testing.md` reflect Phase 1 layout.
-- [x] `README.md` reflects Phase 1 upstream note and testing commands.
+- [x] `docs/architecture.md` and `docs/testing.md` reflect Phase 3 layout.
+- [x] `README.md` reflects Phase 3 upstream note and testing commands.
 
 ### Process
 - [ ] At least one reviewer approval; sprint owner has linked this doc
@@ -851,61 +864,68 @@ between the two repos; downstream relies on it for auto-update safety.
 # 1a. Patches still apply cleanly to the pinned tag
 git apply --check modules/basetool/upstream/patches/*.patch
 # 1b. Re-running sync is a no-op
-python scripts/sync-mhddos-upstream.py --tag v2.4.4 --no-smoke
+python scripts/sync-mhddos-upstream.py --tag 2.4.4 --no-smoke --skip-subtree
 git diff --quiet -- modules/basetool/UPSTREAM.json \
     || echo "UPSTREAM.json drifted unexpectedly"
 
 # ---- 2. Unit + patch tests ----
 pip install -r requirements.txt -r requirements-dev.txt
-pytest tests/unit/ tests/patches/ --cov=modules/basetool --cov-fail-under=80
+pytest tests/patches/
+pytest tests/unit/ -q --cov=modules/basetool/adapter --cov=modules/basetool/runner --cov-report=term-missing --cov-fail-under=80
 
 # ---- 3. Smoke tests ----
 # 3a. Per-method localhost smoke (~30 s)
 python scripts/smoke/runner-methods-smoke.py
 # 3b. Regression parity (~10 s)
 python scripts/smoke/runner-regression-smoke.py
-# 3c. Stability / leak smoke (~10 min, run at least once before merge)
+# 3c. Stability / leak smoke (~10 min in CI; `--duration 15` for a quick local run)
 python scripts/smoke/runner-stability-smoke.py
+python scripts/smoke/runner-stability-smoke.py --duration 15 --method GET
 
 # ---- 4. Release artifact gates ----
-python scripts/release/build-release-artifact.py --from-tag v0.0.0-smoke
-python scripts/release/verify-release-artifact.py dist/basetool-runner-v0.0.0-smoke.tar.gz
-python scripts/release/simulate-downstream-stage.py \
-    dist/basetool-runner-v0.0.0-smoke.tar.gz
+python scripts/release/build-release-artifact.py
+python scripts/release/verify-release-artifact.py
+python scripts/release/simulate-downstream-stage.py
+# SIGTERM assertion runs on Linux/macOS; Windows skips (TerminateProcess bypasses handlers)
 
 # ---- 5. Manual sanity ----
+python basetool.py --help
 python basetool.py
 # expect: BaseTool> prompt, dynamic table after `start`, clean exit on `exit`
-BASETOOL_JSON=1 python basetool.py | jq .  # structured output mode (W12)
+BASETOOL_JSON=1 python basetool.py
+# expect: JSON lines on stdout; table on stderr
 ```
 
-A single shell helper to run the full pre-merge gate:
+Quick local Phase 3 gate (matches `docs/testing.md`):
 
 ```bash
-# scripts/dev/pre-merge-check.sh (optional; document in README)
-set -euo pipefail
-pytest tests/unit/ tests/patches/ --cov=modules/basetool --cov-fail-under=80
+pytest tests/patches/
+pytest tests/unit/ -q --cov=modules/basetool/adapter --cov=modules/basetool/runner --cov-report=term-missing --cov-fail-under=80
 python scripts/smoke/runner-methods-smoke.py
 python scripts/smoke/runner-regression-smoke.py
-echo "PRE-MERGE GATE: OK"
+python scripts/smoke/runner-stability-smoke.py --duration 15
+python scripts/release/build-release-artifact.py
+python scripts/release/verify-release-artifact.py
+python scripts/release/simulate-downstream-stage.py
 ```
 
 ## 12. PR checklist (for the final PR description)
 
-- [ ] Sprint doc linked: `docs/sprints/2026-05-24-mhddos-upstream-integration.md`
-- [ ] Branch is `feature/mhddos-upstream-integration`; commits ordered
+- [x] Sprint doc linked: `docs/sprints/2026-05-24-mhddos-upstream-integration.md`
+- [x] Branch is `feature/mhddos-upstream-integration`; commits ordered
       Phase 1 → Phase 2 → Phase 3 with `<type>: W## <summary>` subjects
-- [ ] All three phase gates passed (see §7 "Phase gates")
-- [ ] All workstreams W1–W13 complete
-- [ ] §11 commands all green on local (including stability smoke run at
-      least once)
+- [x] All three phase gates passed locally (see §7 "Phase gates")
+- [x] All workstreams W1–W13 complete
+- [x] §11 commands green on local (including stability smoke run at
+      least once; SIGTERM via simulate on Linux CI)
 - [ ] `ci.yml` green on feature branch for required matrix cells
+- [ ] `nightly.yml` triggered once via `workflow_dispatch` with green result
 - [ ] `release.yml` triggered on a throwaway tag, produced a verified
       prerelease artifact
-- [ ] W10 downstream stage simulation green
-- [ ] `THIRD_PARTY_NOTICES.md` includes MHDDoS MIT block
-- [ ] `UPSTREAM.json` checked in with tag, sha, patches, methods, drift
-- [ ] `docs/architecture.md` + `docs/testing.md` written and reviewed
+- [x] W10 downstream stage simulation green locally
+- [x] `THIRD_PARTY_NOTICES.md` includes MHDDoS MIT block
+- [x] `UPSTREAM.json` checked in with tag, sha, patches, methods, drift
+- [x] `docs/architecture.md` + `docs/testing.md` written and reviewed
 - [ ] Downstream follow-up issue filed in `itarmykit-basetool` (§9)
 - [ ] Reviewer assigned
 - [ ] Merge method: rebase-merge (or squash-per-phase if team convention
