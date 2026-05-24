@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MegaTool
+BaseTool
 """
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ from yarl import URL
 # Logging
 # ----------------------------------------------------------------------
 logging.basicConfig(format='[%(asctime)s] %(message)s', datefmt="%H:%M:%S")
-logger = logging.getLogger("MegaTool")
+logger = logging.getLogger("BaseTool")
 logger.setLevel(logging.INFO)
 
 # ----------------------------------------------------------------------
@@ -623,7 +623,7 @@ def console(manager: AttackManager):
         sys.stdout.write(f"\033[{prompt_row};1H\033[K")
         sys.stdout.flush()
         try:
-            cmd = input("MegaTool> ").strip().lower()
+            cmd = input("BaseTool> ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             cmd = "exit"
 

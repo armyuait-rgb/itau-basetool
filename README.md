@@ -32,7 +32,7 @@ pip install -r requirements.txt
 ```
 
 ## Файли
-- megatool.py - Основний скрипт
+- basetool.py - Основний скрипт
 - requirements.txt - Cписок залежностей Python.
 - config.json - Файл конфігурації. Тут зберігаються налаштування за замовчуванням.
 - proxy.json - База джерел проксі-серверів.
@@ -72,7 +72,7 @@ pip install -r requirements.txt
 ```
 
 ## Files
-- megatool.py — main script
+- basetool.py — main script
 - requirements.txt — list of Python dependencies
 - config.json — configuration file containing default settings
 - proxy.json — proxy source database
