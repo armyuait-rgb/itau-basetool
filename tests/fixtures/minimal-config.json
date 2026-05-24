@@ -1,0 +1,20 @@
+{
+  "settings": {
+    "threads": 4,
+    "rpc": 1,
+    "proxy": 0
+  },
+  "useragents": [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+  ],
+  "referers": [
+    "https://example.com/"
+  ],
+  "targets": [
+    {
+      "method": "GET",
+      "target": "http://127.0.0.1:8081/",
+      "threads": 4
+    }
+  ]
+}
