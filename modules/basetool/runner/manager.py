@@ -2,18 +2,17 @@ from __future__ import annotations
 
 import logging
 import os
+import signal
 import socket
 import sys
 import threading
 import time
-from pathlib import Path
 from typing import Dict, List, Optional
 
 from PyRoxy import Proxy
 from yarl import URL
 
 from ..adapter.methods import L4_METHODS, METHOD_REGISTRY, make_attack_thread
-from .runtime import resolve_runtime_dir
 from .monitor import monitor_loop
 from .proxy_manager import ProxyManager
 
@@ -21,9 +20,10 @@ logger = logging.getLogger("BaseTool")
 
 
 class AttackManager:
-    def __init__(self, config: dict, proxy_providers: list):
+    def __init__(self, config: dict, proxy_providers: list, json_output: bool = False):
         self.config = config
         self.proxy_providers = proxy_providers
+        self.json_output = json_output
         self.event = threading.Event()
         self.threads: List[threading.Thread] = []
         self.monitor_thread = None
@@ -140,6 +140,9 @@ class AttackManager:
         needed = len(self.target_keys) + 4
         return max(5, min(needed, term_height - 2))
 
+    def _display_stream(self):
+        return sys.stderr if self.json_output else sys.stdout
+
     def start(self):
         if self.event.is_set():
             logger.warning("Already running")
@@ -148,10 +151,11 @@ class AttackManager:
         self.target_keys = self._spawn_threads()
         self.table_height = self._calculate_table_height()
 
-        sys.stdout.write("\033[2J\033[H")
+        display = self._display_stream()
+        display.write("\033[2J\033[H")
         for _ in range(self.table_height):
-            print()
-        print("Type start/stop/exit")
+            print(file=display)
+        print("Type start/stop/exit", file=display)
 
         with self.stats_lock:
             self.target_stats.clear()
@@ -171,6 +175,7 @@ class AttackManager:
                 self.stats_lock,
                 self.target_keys,
                 self.table_height,
+                self.json_output,
             ),
             daemon=True,
         )
@@ -185,13 +190,25 @@ class AttackManager:
         logger.info("Attack stopped.")
 
 
+def _shutdown_manager(manager: AttackManager) -> None:
+    if manager.event.is_set():
+        manager.stop()
+
+
 def console(manager: AttackManager):
+    def _handle_sigterm(_signum, _frame):
+        _shutdown_manager(manager)
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+
     manager.start()
 
     while True:
         prompt_row = manager.table_height + 1
-        sys.stdout.write(f"\033[{prompt_row};1H\033[K")
-        sys.stdout.flush()
+        display = manager._display_stream()
+        display.write(f"\033[{prompt_row};1H\033[K")
+        display.flush()
         try:
             cmd = input("BaseTool> ").strip().lower()
         except (EOFError, KeyboardInterrupt):
@@ -205,8 +222,7 @@ def console(manager: AttackManager):
         elif cmd == "stop":
             manager.stop()
         elif cmd in ("exit", "quit"):
-            if manager.event.is_set():
-                manager.stop()
+            _shutdown_manager(manager)
             break
         elif cmd:
             print("Unknown command. Available: start, stop, exit")

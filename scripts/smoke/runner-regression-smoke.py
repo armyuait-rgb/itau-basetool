@@ -29,6 +29,7 @@ def normalize_output(text: str) -> str:
     text = re.sub(r"PPS: [^\n|]+", "PPS: <N>", text)
     text = re.sub(r"BPS: [^\n]+", "BPS: <N>", text)
     text = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
+    text = re.sub(r"^\{.*\}$", "<JSON>", text, flags=re.MULTILINE)
     text = re.sub(r"\r\n", "\n", text)
     return text.strip() + "\n"
 

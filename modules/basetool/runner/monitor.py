@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from typing import List
 
 
@@ -30,12 +32,27 @@ class DisplayTools:
         return str(num)
 
 
+def _emit_json_tick(delta_req: int, delta_bytes: int, snapshot: dict) -> None:
+    payload = {
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "pps": delta_req,
+        "bps": delta_bytes,
+        "targets": {
+            target: {"req": values[0], "bytes": values[1]}
+            for target, values in snapshot.items()
+        },
+    }
+    sys.stdout.write(json.dumps(payload) + "\n")
+    sys.stdout.flush()
+
+
 def monitor_loop(
     stop_event: threading.Event,
     target_stats: dict,
     stats_lock: threading.Lock,
     target_keys: List[str],
     table_height: int,
+    json_output: bool = False,
 ) -> None:
     prev_total_req = 0
     prev_total_bytes = 0
@@ -68,16 +85,20 @@ def monitor_loop(
             else:
                 lines.append("")
 
-        sys.stdout.write("\033[s")
+        display_stream = sys.stderr if json_output else sys.stdout
+        display_stream.write("\033[s")
         for index in range(table_height):
             text = lines[index] if index < len(lines) else ""
-            sys.stdout.write(f"\033[{index + 1};1H\033[K{text}")
-        sys.stdout.write("\033[u")
-        sys.stdout.flush()
+            display_stream.write(f"\033[{index + 1};1H\033[K{text}")
+        display_stream.write("\033[u")
+        display_stream.flush()
+        if json_output:
+            _emit_json_tick(delta_req, delta_bytes, snapshot)
         time.sleep(1)
 
-    sys.stdout.write("\033[s")
+    cleanup_stream = sys.stderr if json_output else sys.stdout
+    cleanup_stream.write("\033[s")
     for index in range(1, table_height + 1):
-        sys.stdout.write(f"\033[{index};1H\033[K")
-    sys.stdout.write("\033[u")
-    sys.stdout.flush()
+        cleanup_stream.write(f"\033[{index};1H\033[K")
+    cleanup_stream.write("\033[u")
+    cleanup_stream.flush()

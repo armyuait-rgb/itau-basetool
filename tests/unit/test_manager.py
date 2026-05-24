@@ -106,3 +106,31 @@ def test_console_exit_stops_manager(localhost_http_server):
             with patch("builtins.input", side_effect=["exit"]):
                 console(manager)
         assert not manager.event.is_set()
+
+
+def test_console_sigterm_handler_stops_and_exits(localhost_http_server):
+    import signal
+
+    with localhost_http_server() as (_host, port):
+        config = {
+            "settings": {"threads": 1, "rpc": 1, "proxy": 0},
+            "targets": [{"method": "GET", "target": f"http://127.0.0.1:{port}/", "threads": 1}],
+        }
+        manager = AttackManager(config, [])
+        handlers: dict[int, object] = {}
+
+        def _capture(signum, handler):
+            handlers[signum] = handler
+            return signal.getsignal(signum)
+
+        with patch("modules.basetool.runner.manager.signal.signal", side_effect=_capture):
+            with patch("modules.basetool.runner.manager.sys.stdout") as stdout:
+                stdout.write = lambda *_args, **_kwargs: None
+                with patch("builtins.input", side_effect=["exit"]):
+                    console(manager)
+
+        manager.start()
+        with patch("modules.basetool.runner.manager.sys.exit") as mock_exit:
+            handlers[signal.SIGTERM](signal.SIGTERM, None)
+            mock_exit.assert_called_once_with(0)
+        assert not manager.event.is_set()
