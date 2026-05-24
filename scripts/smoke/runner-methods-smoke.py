@@ -16,10 +16,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
-from modules.basetool.adapter import L4_METHODS, METHOD_REGISTRY, make_attack_thread
+
+def _adapter():
+    from modules.basetool.adapter import L4_METHODS, METHOD_REGISTRY, make_attack_thread
+
+    return L4_METHODS, METHOD_REGISTRY, make_attack_thread
 
 
 class _AnyMethodHandler(BaseHTTPRequestHandler):
@@ -122,7 +124,16 @@ def _syn_supported() -> tuple[bool, str]:
         return False, f"SYN skipped: {exc}"
 
 
-def _run_method(method: str, host: str, l7_port: int, l4_tcp_port: int, l4_udp_port: int) -> tuple[str, str]:
+def _run_method(
+    method: str,
+    host: str,
+    l7_port: int,
+    l4_tcp_port: int,
+    l4_udp_port: int,
+    *,
+    l4_methods,
+    make_attack_thread,
+) -> tuple[str, str]:
     from yarl import URL
 
     if method == "SYN":
@@ -137,7 +148,7 @@ def _run_method(method: str, host: str, l7_port: int, l4_tcp_port: int, l4_udp_p
     target_key = ""
     threads = []
 
-    if method in L4_METHODS:
+    if method in l4_methods:
         if method == "UDP":
             target_key = f"{host}:{l4_udp_port}"
             thread = make_attack_thread(
@@ -194,11 +205,30 @@ def _run_method(method: str, host: str, l7_port: int, l4_tcp_port: int, l4_udp_p
 
 
 def main() -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Per-method localhost smoke")
+    parser.add_argument("--runner-root", type=Path, default=REPO_ROOT, help="Runner root directory")
+    args = parser.parse_args()
+
+    runner_root = args.runner_root.resolve()
+    if str(runner_root) not in sys.path:
+        sys.path.insert(0, str(runner_root))
+
+    l4_methods, method_registry, make_attack_thread = _adapter()
     results: list[tuple[str, str, str]] = []
     with _http_server() as (_h1, l7_port), _tcp_echo(port=8082) as (_h2, l4_tcp_port), _udp_echo(port=8083) as (_h3, l4_udp_port):
         host = "127.0.0.1"
-        for method in sorted(METHOD_REGISTRY):
-            status, detail = _run_method(method, host, l7_port, l4_tcp_port, l4_udp_port)
+        for method in sorted(method_registry):
+            status, detail = _run_method(
+                method,
+                host,
+                l7_port,
+                l4_tcp_port,
+                l4_udp_port,
+                l4_methods=l4_methods,
+                make_attack_thread=make_attack_thread,
+            )
             results.append((method, status, detail))
             print(f"{method:8} {status:4} {detail}")
 
