@@ -15,6 +15,7 @@ DIST_DIR = REPO_ROOT / "dist"
 
 INCLUDE_PATHS = [
     "basetool.py",
+    "crypto.py",
     "config.json",
     "proxy.json",
     "requirements.txt",
@@ -93,9 +94,6 @@ def _collect_files() -> list[tuple[Path, str]]:
             relative = path.relative_to(REPO_ROOT).as_posix()
             if _should_include(relative):
                 files.append((path, relative))
-    upstream_manifest = REPO_ROOT / "modules/basetool/UPSTREAM.json"
-    if upstream_manifest.exists():
-        files.append((upstream_manifest, "modules/basetool/UPSTREAM.json"))
     return files
 
 

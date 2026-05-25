@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import platform
@@ -15,7 +16,7 @@ import sys
 import threading
 import time
 from contextlib import contextmanager
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import HTTPServer
 from pathlib import Path
 
 import psutil
@@ -24,28 +25,25 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+
+def _load_helper(name: str, relative: str):
+    path = REPO_ROOT / relative
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+process_driver = _load_helper("process_driver", "scripts/smoke/process_driver.py")
+quiet_http = _load_helper("quiet_http", "scripts/smoke/quiet_http.py")
+
 from modules.basetool.adapter import L4_METHODS, METHOD_REGISTRY
-
-
-class _AnyMethodHandler(BaseHTTPRequestHandler):
-    def log_message(self, *_args, **_kwargs):
-        return
-
-    def _ok(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"ok")
-
-    def do_GET(self):
-        self._ok()
-
-    do_POST = do_GET
-    do_HEAD = do_GET
 
 
 @contextmanager
 def _http_server(host: str = "127.0.0.1", port: int = 8081):
-    server = HTTPServer((host, port), _AnyMethodHandler)
+    server = HTTPServer((host, port), quiet_http.QuietOKHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -239,6 +237,7 @@ def _run_method_once(
     env["PYTHONPATH"] = str(runner_root)
     env["BASETOOL_RUNTIME_DIR"] = str(stage)
     env["BASETOOL_JSON"] = "1"
+    env["BASETOOL_DEV_PLAINTEXT_CONFIGS"] = "1"
     env["PYTHONUNBUFFERED"] = "1"
 
     proc = subprocess.Popen(
@@ -254,11 +253,17 @@ def _run_method_once(
     rss_samples: list[tuple[float, int]] = []
     thread_samples: list[tuple[float, int]] = []
     output_chunks: list[str] = []
+    reader = process_driver.start_output_reader(proc, output_chunks)
     start = time.monotonic()
 
     try:
         ps_proc = psutil.Process(proc.pid)
         while time.monotonic() - start < duration:
+            if proc.poll() is not None:
+                return "FAIL", (
+                    f"exit code {proc.returncode}: "
+                    f"{process_driver.tail_output(output_chunks)}"
+                )
             elapsed = time.monotonic() - start
             try:
                 rss_samples.append((elapsed, ps_proc.memory_info().rss))
@@ -267,19 +272,28 @@ def _run_method_once(
                 pass
             time.sleep(sample_interval)
 
-        proc.stdin.write("stop\nexit\n")
-        proc.stdin.flush()
-        stdout, _stderr = proc.communicate(timeout=15)
-        output_chunks.append(stdout or "")
+        process_driver.shutdown_runner(proc, output_chunks=output_chunks, wait_timeout=15)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate(timeout=5)
+        return "FAIL", "shutdown timed out"
+    except RuntimeError as exc:
+        proc.kill()
+        proc.communicate(timeout=5)
+        return "FAIL", str(exc)
     except Exception as exc:
         proc.kill()
         proc.communicate(timeout=5)
         return "FAIL", f"runner crashed: {exc}"
     finally:
+        reader.join(timeout=2)
         shutil.rmtree(stage, ignore_errors=True)
 
     if proc.returncode != 0:
-        return "FAIL", f"exit code {proc.returncode}"
+        return "FAIL", (
+            f"exit code {proc.returncode}: "
+            f"{process_driver.tail_output(output_chunks)}"
+        )
 
     json_rows = _parse_json_lines("".join(output_chunks))
     checks = [

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import platform
@@ -15,7 +16,7 @@ import tarfile
 import tempfile
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import HTTPServer
 from pathlib import Path
 
 import psutil
@@ -25,21 +26,22 @@ DIST_DIR = REPO_ROOT / "dist"
 FIXTURES = REPO_ROOT / "tests/fixtures"
 
 
-class _QuietHandler(BaseHTTPRequestHandler):
-    def log_message(self, *_args, **_kwargs):
-        return
+def _load_smoke_module(name: str, relative: str):
+    path = REPO_ROOT / relative
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"ok")
+
+process_driver = _load_smoke_module("process_driver", "scripts/smoke/process_driver.py")
+quiet_http = _load_smoke_module("quiet_http", "scripts/smoke/quiet_http.py")
+archive_utils = _load_smoke_module("archive_utils", "scripts/release/archive_utils.py")
 
 
 def _latest_archive() -> Path:
-    candidates = sorted(DIST_DIR.glob("basetool-runner-*.tar.gz"))
-    if not candidates:
-        raise SystemExit(f"error: no release archives found in {DIST_DIR}")
-    return candidates[-1]
+    return archive_utils.latest_archive(DIST_DIR)
 
 
 def _extract_runner(archive: Path, destination: Path) -> Path:
@@ -86,6 +88,7 @@ def _launch_runner(extract_dir: Path, runtime_dir: Path) -> subprocess.Popen[str
     env["PYTHONPATH"] = str(extract_dir)
     env["BASETOOL_RUNTIME_DIR"] = str(runtime_dir)
     env["BASETOOL_JSON"] = "1"
+    env["BASETOOL_DEV_PLAINTEXT_CONFIGS"] = "1"
     env["PYTHONUNBUFFERED"] = "1"
     return subprocess.Popen(
         [sys.executable, str(extract_dir / "basetool.py")],
@@ -100,38 +103,33 @@ def _launch_runner(extract_dir: Path, runtime_dir: Path) -> subprocess.Popen[str
 
 def _console_scenario(extract_dir: Path, runtime_dir: Path) -> None:
     proc = _launch_runner(extract_dir, runtime_dir)
-    assert proc.stdin is not None
-    assert proc.stdout is not None
-
     output: list[str] = []
-
-    def _reader():
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            output.append(line)
-
-    thread = threading.Thread(target=_reader, daemon=True)
-    thread.start()
-
-    time.sleep(1)
-    proc.stdin.write("start\n")
-    proc.stdin.flush()
-    time.sleep(5)
-    proc.stdin.write("stop\n")
-    proc.stdin.flush()
-    time.sleep(1)
-    proc.stdin.write("exit\n")
-    proc.stdin.flush()
+    reader = process_driver.start_output_reader(proc, output)
 
     try:
+        time.sleep(1)
+        process_driver.write_command(proc, "start\n", output_chunks=output, label="console")
+        time.sleep(5)
+        process_driver.write_command(proc, "stop\n", output_chunks=output, label="console")
+        time.sleep(1)
+        process_driver.write_command(proc, "exit\n", output_chunks=output, label="console")
+        if proc.stdin is not None:
+            proc.stdin.close()
         proc.wait(timeout=10)
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.communicate(timeout=5)
         raise SystemExit("error: console scenario timed out waiting for exit")
+    except RuntimeError as exc:
+        proc.kill()
+        proc.communicate(timeout=5)
+        raise SystemExit(f"error: console scenario failed: {exc}") from exc
+    finally:
+        reader.join(timeout=2)
 
     if proc.returncode != 0:
-        raise SystemExit(f"error: console scenario exit code {proc.returncode}")
+        tail = process_driver.tail_output(output)
+        raise SystemExit(f"error: console scenario exit code {proc.returncode}\n{tail}")
 
     json_rows = _parse_json_lines("".join(output))
     if not any(row.get("pps", 0) > 0 for row in json_rows):
@@ -154,18 +152,22 @@ def _terminate_runner(proc: subprocess.Popen[str]) -> None:
 
 def _sigterm_scenario(extract_dir: Path, runtime_dir: Path) -> None:
     proc = _launch_runner(extract_dir, runtime_dir)
-    time.sleep(3)
-    _terminate_runner(proc)
-
+    output: list[str] = []
+    reader = process_driver.start_output_reader(proc, output)
     try:
+        time.sleep(3)
+        _terminate_runner(proc)
         proc.wait(timeout=10)
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.communicate(timeout=5)
         raise SystemExit("error: SIGTERM scenario timed out")
+    finally:
+        reader.join(timeout=2)
 
-    if proc.returncode != 0:
-        raise SystemExit(f"error: SIGTERM scenario exit code {proc.returncode}")
+    if proc.returncode != 0 and platform.system().lower() != "windows":
+        tail = process_driver.tail_output(output)
+        raise SystemExit(f"error: SIGTERM scenario exit code {proc.returncode}\n{tail}")
 
     orphans = _child_orphans(proc.pid)
     if orphans:
@@ -181,7 +183,7 @@ def main() -> int:
     if not archive.exists():
         raise SystemExit(f"error: archive not found {archive}")
 
-    server = HTTPServer(("127.0.0.1", 8081), _QuietHandler)
+    server = HTTPServer(("127.0.0.1", 8081), quiet_http.QuietOKHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
     time.sleep(0.2)

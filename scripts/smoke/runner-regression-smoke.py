@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import difflib
+import importlib.util
 import os
 import re
 import shutil
@@ -12,7 +13,7 @@ import sys
 import tempfile
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import HTTPServer
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -21,6 +22,18 @@ INPUT_PATH = FIXTURES / "regression-input.txt"
 CONFIG_PATH = FIXTURES / "minimal-config.json"
 SNAPSHOT_PATH = FIXTURES / "regression-snapshot-pre.txt"
 BASETOOL = REPO_ROOT / "basetool.py"
+
+
+def _load_quiet_http():
+    path = REPO_ROOT / "scripts/smoke/quiet_http.py"
+    spec = importlib.util.spec_from_file_location("quiet_http", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+quiet_http = _load_quiet_http()
 
 
 def normalize_output(text: str) -> str:
@@ -39,14 +52,8 @@ def normalize_output(text: str) -> str:
     return text.strip() + "\n"
 
 
-class _QuietHandler(BaseHTTPRequestHandler):
-    def log_message(self, *_args, **_kwargs):
-        return
-
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"ok")
+class _QuietHandler(quiet_http.QuietOKHandler):
+    pass
 
 
 def _stage_runtime(tmp_dir: Path) -> None:

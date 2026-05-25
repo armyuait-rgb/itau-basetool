@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import platform
@@ -12,10 +13,22 @@ import sys
 import threading
 import time
 from contextlib import contextmanager
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import HTTPServer
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _load_quiet_http():
+    path = REPO_ROOT / "scripts/smoke/quiet_http.py"
+    spec = importlib.util.spec_from_file_location("quiet_http", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+quiet_http = _load_quiet_http()
 
 
 def _adapter():
@@ -24,20 +37,8 @@ def _adapter():
     return L4_METHODS, METHOD_REGISTRY, make_attack_thread
 
 
-class _AnyMethodHandler(BaseHTTPRequestHandler):
-    def log_message(self, *_args, **_kwargs):
-        return
-
-    def _ok(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"ok")
-
-    def do_GET(self):
-        self._ok()
-
-    do_POST = do_GET
-    do_HEAD = do_GET
+class _AnyMethodHandler(quiet_http.QuietOKHandler):
+    pass
 
 
 @contextmanager

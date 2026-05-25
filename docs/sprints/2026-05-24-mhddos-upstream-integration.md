@@ -762,6 +762,8 @@ PR can merge when **all** of the following are true.
       parity).
 - [x] `python scripts/smoke/runner-stability-smoke.py` has been run at
       least once on the feature branch and is green for all 9 methods.
+- [x] Extended ship gate (pytest packs + regression + methods + stability +
+      build + verify + simulate) green locally on Windows, 2026-05-25.
 
 ### CI
 - [x] `ci.yml` is green on the feature branch for the required matrix cells

@@ -24,10 +24,10 @@ FORBIDDEN_PREFIXES = (
 
 
 def _latest_archive() -> Path:
-    candidates = sorted(DIST_DIR.glob("basetool-runner-*.tar.gz"))
+    candidates = list(DIST_DIR.glob("basetool-runner-*.tar.gz"))
     if not candidates:
         raise SystemExit(f"error: no release archives found in {DIST_DIR}")
-    return candidates[-1]
+    return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
 def _verify_checksum(archive: Path) -> None:

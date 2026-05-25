@@ -25,9 +25,8 @@ pytest tests/upstream/ -q
 pytest tests/integration tests/orchestration tests/release tests/upstream -q
 ```
 
-Integration parity between legacy `basetool.py` and
-`tests/integration/refactored_entrypoint.py` is tracked with
-`test_root_entrypoint_parity.py` (expected xfail until W4 root thinning lands).
+Integration subprocess coverage lives in `tests/integration/` for config
+matrices, unreachable targets, and concurrent runners.
 
 Release contract tests build a tarball locally before layout/schema checks:
 
@@ -38,6 +37,38 @@ pytest tests/release/ -q
 
 Weekly upstream drift monitoring runs via
 [`.github/workflows/upstream-drift.yml`](../.github/workflows/upstream-drift.yml).
+
+## Ship gate (full local release check)
+
+Run this before tagging or merging release-hardening work:
+
+```bash
+python -m pytest tests/patches tests/unit tests/integration tests/orchestration tests/release tests/upstream -q
+python scripts/smoke/runner-regression-smoke.py
+python scripts/smoke/runner-methods-smoke.py
+python scripts/smoke/runner-stability-smoke.py --duration 15
+python scripts/release/build-release-artifact.py
+python scripts/release/verify-release-artifact.py dist/basetool-runner-dev-<sha>.tar.gz
+python scripts/release/simulate-downstream-stage.py dist/basetool-runner-dev-<sha>.tar.gz
+```
+
+Pass criteria:
+
+- all commands exit `0`
+- `SYN` is the only expected skip on Windows / non-root Linux
+- stability reports `PASS` for all non-skipped methods
+- downstream simulation prints `downstream stage simulation OK`
+
+Notes:
+
+- Pass an explicit archive path after `build-release-artifact.py`. When omitted,
+  verify/simulate pick the newest `dist/basetool-runner-*.tar.gz` by mtime.
+- Subprocess smokes that launch `basetool.py` require
+  `BASETOOL_DEV_PLAINTEXT_CONFIGS=1` when staging plaintext `config.json`.
+- Windows downstream simulation uses `psutil.Process.terminate()` instead of
+  SIGTERM; exit code `0` is not required on Windows for the terminate scenario.
+
+Local green run: Windows dev box, 2026-05-25 — full ship gate above exited `0`.
 
 ## Phase 3 gate (release check)
 
@@ -114,22 +145,27 @@ python scripts/release/build-release-artifact.py
 python scripts/release/build-release-artifact.py --from-tag
 ```
 
-Verify the packed artifact and run per-method smoke against the extracted tree:
+Verify the packed artifact and run per-method smoke against the extracted tree.
+Prefer an explicit archive path for the tarball you just built:
 
 ```bash
 python scripts/release/verify-release-artifact.py
 python scripts/release/verify-release-artifact.py dist/basetool-runner-dev-<sha>.tar.gz
 ```
 
+When no path is given, verify picks the newest `dist/basetool-runner-*.tar.gz`
+by modification time.
+
 Simulate downstream staging and auto-update consumption:
 
 ```bash
 python scripts/release/simulate-downstream-stage.py
+python scripts/release/simulate-downstream-stage.py dist/basetool-runner-dev-<sha>.tar.gz
 ```
 
-On Linux/macOS the simulator sends SIGTERM to the runner process. On Windows
-it uses `psutil.Process.terminate()` (hard kill) and asserts clean exit within
-10 seconds; release CI still runs the Linux SIGTERM path on `ubuntu-latest`.
+On Linux/macOS the simulator sends SIGTERM to the runner process. On Windows it
+uses `psutil.Process.terminate()` and only requires a timely exit with no orphan
+children; release CI still runs the Linux SIGTERM path on `ubuntu-latest`.
 
 ## Test pyramid
 
