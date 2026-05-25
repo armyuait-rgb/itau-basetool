@@ -25,7 +25,11 @@ BASETOOL = REPO_ROOT / "basetool.py"
 
 def normalize_output(text: str) -> str:
     text = re.sub(r"\[\d{2}:\d{2}:\d{2}\]", "[HH:MM:SS]", text)
-    text = re.sub(r"\[\d{2}:\d{2}:\d{2} - INFO\]", "[HH:MM:SS - INFO]", text)
+    text = re.sub(r"\[\d{2}:\d{2}:\d{2} - INFO\]", "[HH:MM:SS]", text)
+    text = re.sub(r"BaseTool> ?", "", text)
+    text = re.sub(r"\[HH:MM:SS\] Resolved target .+\n", "", text)
+    text = re.sub(r"\[HH:MM:SS\] Launching \d+ threads\.\.\.\n", "", text)
+    text = re.sub(r"target .+ unreachable: .+\n", "", text)
     text = re.sub(r"PPS: [^\n|]+", "PPS: <N>", text)
     text = re.sub(r"BPS: [^\n]+", "BPS: <N>", text)
     text = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", text)
@@ -53,6 +57,7 @@ def run_runner() -> str:
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONPATH"] = str(REPO_ROOT)
+    env["BASETOOL_DEV_PLAINTEXT_CONFIGS"] = "1"
 
     server = HTTPServer(("127.0.0.1", 8081), _QuietHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
