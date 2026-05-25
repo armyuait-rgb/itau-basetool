@@ -235,6 +235,8 @@ Landings on `feature/mhddos-upstream-integration`:
 - Vendored `start.py` init bodies were repaired after patch apply (hooks must not swallow `self.methods` setup).
 - Regression smoke stages config via `BASETOOL_RUNTIME_DIR` rather than overwriting repo `config.json`.
 - SYN smoke skips on Windows/non-root (per sprint spec).
+- W4 root-entrypoint thinning landed in a Phase 3 cleanup pass: root `basetool.py` shrinks to ~80 lines delegating to `modules.basetool.runner`. The transitional `tests/integration/test_root_entrypoint_parity.py` and `refactored_entrypoint.py` helper are retired; W7f regression-snapshot smoke remains the persistent parity check.
+- Legacy watchdog warning shape is preserved (`target X unreachable: ...`) but the `(last: ExcName)` tail is `(last: unknown)` because upstream MHDDoS wraps attack methods in `suppress(Exception)`. Restoring the exception name would require a new `0003-health-hook.patch`.
 
 ### Phase 1 implementation log (2026-05-24)
 
@@ -874,6 +876,7 @@ between the two repos; downstream relies on it for auto-update safety.
 | Auto-update picks up a broken release because release workflow has a bug, not the runner | Med | `release.yml` marks any failed-job release as `prerelease=true`; downstream auto-updater filters to `prerelease=false`. Document this contract in §9 follow-up — downstream MUST honour the prerelease flag |
 | Tag-pushed release workflow takes too long (CI matrix × release jobs × stability smoke) | Low | Stability smoke runs on a single Ubuntu cell in `release.yml`, not the full matrix; total budget ~25 min, acceptable for release cadence |
 | `psutil`-based stability checks are flaky on shared CI runners due to noisy-neighbour CPU contention | Med | Stability smoke runs nightly, not per-PR; failures auto-file a tracking issue rather than blocking; thresholds (RSS < 20%, PPS variance < 30%) are deliberately loose |
+| Legacy watchdog `(last: ExcName)` lost after adapter cutover | Low | Upstream MHDDoS swallows exceptions via `suppress(Exception)`; adapter health watchdog emits `(last: unknown)` instead. Restoring exception names requires `0003-health-hook.patch` on the 9 in-registry methods |
 
 ## 11. Verification commands (paste into PR description)
 

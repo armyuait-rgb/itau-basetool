@@ -12,6 +12,33 @@ Architecture context: [docs/architecture.md](architecture.md).
 pip install -r requirements.txt -r requirements-dev.txt
 ```
 
+## Extended test packs
+
+Module orchestration, release contract, and upstream safety checks added beyond
+the Phase 3 pyramid:
+
+```bash
+pytest tests/integration/ -q
+pytest tests/orchestration/ -q
+pytest tests/release/ -q
+pytest tests/upstream/ -q
+pytest tests/integration tests/orchestration tests/release tests/upstream -q
+```
+
+Integration parity between legacy `basetool.py` and
+`tests/integration/refactored_entrypoint.py` is tracked with
+`test_root_entrypoint_parity.py` (expected xfail until W4 root thinning lands).
+
+Release contract tests build a tarball locally before layout/schema checks:
+
+```bash
+python scripts/release/build-release-artifact.py
+pytest tests/release/ -q
+```
+
+Weekly upstream drift monitoring runs via
+[`.github/workflows/upstream-drift.yml`](../.github/workflows/upstream-drift.yml).
+
 ## Phase 3 gate (release check)
 
 ```bash
@@ -100,9 +127,9 @@ Simulate downstream staging and auto-update consumption:
 python scripts/release/simulate-downstream-stage.py
 ```
 
-On Linux/macOS the simulator includes a SIGTERM clean-shutdown check. On Windows
-that check is skipped because `TerminateProcess` does not invoke Python signal
-handlers; release CI runs the full check on `ubuntu-latest`.
+On Linux/macOS the simulator sends SIGTERM to the runner process. On Windows
+it uses `psutil.Process.terminate()` (hard kill) and asserts clean exit within
+10 seconds; release CI still runs the Linux SIGTERM path on `ubuntu-latest`.
 
 ## Test pyramid
 
@@ -115,6 +142,12 @@ handlers; release CI runs the full check on `ubuntu-latest`.
 | Stability / leak | `scripts/smoke/runner-stability-smoke.py` | Nightly + tag push | **3 — live** |
 | Release artifact | `scripts/release/verify-release-artifact.py` | Tag push | **3 — live** |
 | Downstream stage | `scripts/release/simulate-downstream-stage.py` | Tag push | **3 — live** |
+| Integration packs | `tests/integration/` | Every push/PR (CI) | **extended** |
+| Orchestration CLI | `tests/orchestration/` | Every push/PR (CI) | **extended** |
+| Release contract | `tests/release/` | Every push/PR + tag push | **extended** |
+| Upstream safety | `tests/upstream/` | Every push/PR (CI) | **extended** |
+| Upstream drift | `.github/workflows/upstream-drift.yml` | Weekly | **extended** |
+| Supply-chain audit | `pip-audit` in nightly | Daily (informational) | **extended** |
 
 ## CI
 
@@ -122,10 +155,12 @@ Workflows:
 
 - [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) — patch, unit, and smoke on every push/PR
 - [`.github/workflows/nightly.yml`](../.github/workflows/nightly.yml) — daily stability smoke
+- [`.github/workflows/upstream-drift.yml`](../.github/workflows/upstream-drift.yml) — weekly MHDDoS release drift check
 - [`.github/workflows/release.yml`](../.github/workflows/release.yml) — tag push release gate
 
-`ci.yml` matrix: Ubuntu + Windows × Python 3.11 + 3.12. Each cell runs patch
-tests, unit tests, methods smoke, and regression smoke.
+`ci.yml` matrix: Ubuntu + Windows + macOS × Python 3.11 + 3.12. Each cell runs patch
+tests, unit tests, methods smoke, regression smoke, and extended test packs
+(`tests/integration`, `tests/orchestration`, `tests/release`, `tests/upstream`).
 
 `release.yml` runs the full CI matrix, stability smoke, build, verify,
 downstream simulation, and publishes a GitHub release. Tags containing `smoke`

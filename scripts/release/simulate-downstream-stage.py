@@ -142,17 +142,20 @@ def _console_scenario(extract_dir: Path, runtime_dir: Path) -> None:
         raise SystemExit(f"error: console scenario left orphan processes: {[p.pid for p in orphans]}")
 
 
-def _sigterm_scenario(extract_dir: Path, runtime_dir: Path) -> None:
+def _terminate_runner(proc: subprocess.Popen[str]) -> None:
     if platform.system().lower() == "windows":
-        print("SIGTERM scenario SKIP on Windows (TerminateProcess bypasses Python handlers)")
+        psutil.Process(proc.pid).terminate()
         return
-
-    proc = _launch_runner(extract_dir, runtime_dir)
-    time.sleep(3)
     if hasattr(signal, "SIGTERM"):
         proc.send_signal(signal.SIGTERM)
     else:
         proc.terminate()
+
+
+def _sigterm_scenario(extract_dir: Path, runtime_dir: Path) -> None:
+    proc = _launch_runner(extract_dir, runtime_dir)
+    time.sleep(3)
+    _terminate_runner(proc)
 
     try:
         proc.wait(timeout=10)

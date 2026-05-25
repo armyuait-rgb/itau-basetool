@@ -1,0 +1,74 @@
+name: upstream-drift
+
+on:
+  schedule:
+    - cron: "0 8 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  drift:
+    name: upstream drift check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compare pinned MHDDoS tag with upstream latest
+        id: compare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PINNED_TAG=$(python - <<'PY'
+          import json
+          from pathlib import Path
+          manifest = json.loads(Path("modules/basetool/UPSTREAM.json").read_text())
+          print(manifest["tag"])
+          PY
+          )
+          LATEST_TAG=$(gh api repos/MatrixTM/MHDDoS/releases/latest --jq .tag_name)
+          echo "pinned=${PINNED_TAG}" >> "$GITHUB_OUTPUT"
+          echo "latest=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
+          if [ "${PINNED_TAG}" = "${LATEST_TAG}" ]; then
+            echo "drift=false" >> "$GITHUB_OUTPUT"
+            echo "Upstream tag ${PINNED_TAG} is current."
+          else
+            echo "drift=true" >> "$GITHUB_OUTPUT"
+            echo "Drift detected: pinned=${PINNED_TAG} latest=${LATEST_TAG}"
+          fi
+
+      - name: Open or update drift issue
+        if: steps.compare.outputs.drift == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PINNED="${{ steps.compare.outputs.pinned }}"
+          LATEST="${{ steps.compare.outputs.latest }}"
+          TITLE="Upstream drift: MHDDoS ${PINNED} -> ${LATEST}"
+          BODY=$(cat <<EOF
+          Weekly upstream drift check detected a newer MHDDoS release.
+
+          - Pinned tag: \`${PINNED}\`
+          - Latest release: \`${LATEST}\`
+          - Compare: https://github.com/MatrixTM/MHDDoS/compare/${PINNED}...${LATEST}
+
+          Sync command:
+
+          \`\`\`bash
+          python scripts/sync-mhddos-upstream.py --tag ${LATEST}
+          \`\`\`
+          EOF
+          )
+          EXISTING=$(gh issue list --label upstream-drift --state open --json number,title --jq '.[0].number // empty')
+          if [ -n "${EXISTING}" ]; then
+            gh issue comment "${EXISTING}" --body "${BODY}"
+            gh issue edit "${EXISTING}" --title "${TITLE}"
+          else
+            gh issue create --title "${TITLE}" --body "${BODY}" --label upstream-drift
+          fi

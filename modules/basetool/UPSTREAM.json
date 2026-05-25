@@ -2,7 +2,7 @@
   "repo": "https://github.com/MatrixTM/MHDDoS",
   "tag": "2.4.4",
   "sha": "fa57712c70071b8a79d49398fc80b7259ff1a68b",
-  "sync_date": "2026-05-24T16:56:44Z",
+  "sync_date": "2026-05-25T08:39:18Z",
   "patches": [
     "0001-stats-hook.patch",
     "0002-guard-main.patch"

@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.11", "3.12"]
 
     steps:
@@ -46,6 +46,9 @@ jobs:
 
       - name: Run regression snapshot smoke
         run: python scripts/smoke/runner-regression-smoke.py
+
+      - name: Run extended test packs
+        run: pytest tests/integration tests/orchestration tests/release tests/upstream -q
 
   stability:
     name: stability / ubuntu-latest
@@ -119,6 +122,9 @@ jobs:
 
       - name: Verify tarball
         run: python scripts/release/verify-release-artifact.py
+
+      - name: Run release contract tests
+        run: pytest tests/release -q
 
   simulate:
     name: simulate downstream stage

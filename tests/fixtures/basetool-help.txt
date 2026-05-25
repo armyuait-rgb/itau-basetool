@@ -1,0 +1,13 @@
+usage: basetool.py [-h] [--json]
+
+BaseTool runner
+
+options:
+  -h, --help  show this help message and exit
+  --json      Emit structured monitor telemetry on stdout (table on stderr)
+
+Console commands on stdin: start, stop, exit
+Environment:
+  BASETOOL_JSON=1          Emit structured monitor telemetry on stdout
+  BASETOOL_RUNTIME_DIR     Directory containing config.json and proxy.json
+  BASETOOL_DEV_PLAINTEXT_CONFIGS=1  Use plaintext config.json/proxy.json

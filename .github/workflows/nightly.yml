@@ -25,10 +25,29 @@ jobs:
           pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Run stability smoke
+        id: stability
         run: python scripts/smoke/runner-stability-smoke.py --duration 60
 
-      - name: Open tracking issue on failure
-        if: failure()
+      - name: Run pip-audit
+        id: audit
+        continue-on-error: true
+        run: |
+          python -m pip install pip-audit
+          pip-audit -r requirements.txt --format=json | tee audit.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          raw = Path("audit.json").read_text(encoding="utf-8").strip()
+          findings = json.loads(raw or "[]")
+          Path("audit-count.txt").write_text(str(len(findings)), encoding="utf-8")
+          if findings:
+              print(f"pip-audit reported {len(findings)} finding(s)")
+              raise SystemExit(1)
+          PY
+
+      - name: Open tracking issue on stability failure
+        if: failure() && steps.stability.outcome == 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -36,3 +55,20 @@ jobs:
             --title "Nightly stability smoke failed (${{ github.run_id }})" \
             --body "Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             || true
+
+      - name: Open supply-chain issue on pip-audit findings
+        if: steps.audit.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          COUNT=$(cat audit-count.txt)
+          TITLE="pip-audit findings: ${COUNT} (${{ github.run_id }})"
+          BODY="Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Review audit.json from the nightly run."
+          EXISTING=$(gh issue list --label supply-chain --state open --json number --jq '.[0].number // empty')
+          if [ -n "${EXISTING}" ]; then
+            gh issue comment "${EXISTING}" --body "${BODY}"
+          else
+            gh issue create --title "${TITLE}" --body "${BODY}" --label supply-chain || true
+          fi
