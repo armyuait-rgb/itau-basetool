@@ -38,19 +38,33 @@ cd BaseTool
 pip install -r requirements.txt
 ```
 
-## Тестування (Phase 3)
+## Перевірка працездатності
+
+Остання локальна перевірка: **2026-05-25**, commit [`5889ff3`](https://github.com/armyuait-rgb/itau-basetool/commit/5889ff3), Windows dev box.
+
+| Перевірка | Статус | Що підтверджує |
+|---|---|---|
+| Pytest packs | ✅ 61 passed, 1 skipped | модулі, оркестрація, release-контракт, upstream safety |
+| Methods smoke | ✅ 8/8 (SYN skip на Windows) | кожен метод атаки генерує трафік |
+| Regression snapshot | ✅ parity OK | стабільний вивід консолі |
+| Stability smoke | ✅ RSS 0% | без витоків пам’яті / зависань потоків |
+| Release artifact | ✅ verified | tarball + sha256, golden manifest |
+| Downstream simulation | ✅ OK | розгортання як у itarmykit-basetool |
+
+Повний ship gate (запускати перед тегом або merge release-hardening):
 
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt
-pytest tests/patches/
-pytest tests/unit/ -q --cov=modules/basetool/adapter --cov=modules/basetool/runner --cov-report=term-missing --cov-fail-under=80
-python scripts/smoke/runner-methods-smoke.py
+python -m pytest tests/patches tests/unit tests/integration tests/orchestration tests/release tests/upstream -q
 python scripts/smoke/runner-regression-smoke.py
+python scripts/smoke/runner-methods-smoke.py
 python scripts/smoke/runner-stability-smoke.py --duration 15
 python scripts/release/build-release-artifact.py
-python scripts/release/verify-release-artifact.py
-python scripts/release/simulate-downstream-stage.py
+python scripts/release/verify-release-artifact.py dist/basetool-runner-dev-<sha>.tar.gz
+python scripts/release/simulate-downstream-stage.py dist/basetool-runner-dev-<sha>.tar.gz
 ```
+
+CI macOS matrix ще не верифікований на GitHub Actions — див. [docs/testing.md](docs/testing.md).
 
 ## Синхронізація upstream
 
@@ -59,7 +73,7 @@ python scripts/sync-mhddos-upstream.py --tag 2.4.4
 python scripts/sync-mhddos-upstream.py --tag 2.4.4 --no-smoke --skip-subtree
 ```
 
-Докладніше: [docs/testing.md](docs/testing.md).
+Докладніше: [docs/testing.md](docs/testing.md) — повна піраміда тестів і таблиця статусу.
 
 ## Файли
 - basetool.py - Основний скрипт
@@ -76,7 +90,7 @@ python scripts/sync-mhddos-upstream.py --tag 2.4.4 --no-smoke --skip-subtree
 - scripts/smoke/ - Localhost smoke harnesses.
 - scripts/release/ - Release tarball build, verify, and downstream stage simulation.
 - docs/architecture.md - Архітектура upstream integration.
-- docs/testing.md - Команди тестування.
+- docs/testing.md - Команди тестування та таблиця статусу працездатності.
 - README.md - Документація проекту.
 --
 # BaseTool
@@ -119,19 +133,33 @@ cd BaseTool
 pip install -r requirements.txt
 ```
 
-## Testing (Phase 3)
+## Workability check
+
+Last local verification: **2026-05-25**, commit [`5889ff3`](https://github.com/armyuait-rgb/itau-basetool/commit/5889ff3), Windows dev box.
+
+| Check | Status | What it proves |
+|---|---|---|
+| Pytest packs | ✅ 61 passed, 1 skipped | modules, orchestration scripts, release contract, upstream safety |
+| Methods smoke | ✅ 8/8 (SYN skip on Windows) | every attack method generates traffic |
+| Regression snapshot | ✅ parity OK | stable console output |
+| Stability smoke | ✅ 0% RSS growth | no memory leaks or thread drift |
+| Release artifact | ✅ verified | tarball + sha256, golden manifest |
+| Downstream simulation | ✅ OK | staging like itarmykit-basetool auto-update |
+
+Full ship gate (run before tagging or merging release-hardening):
 
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt
-pytest tests/patches/
-pytest tests/unit/ -q --cov=modules/basetool/adapter --cov=modules/basetool/runner --cov-report=term-missing --cov-fail-under=80
-python scripts/smoke/runner-methods-smoke.py
+python -m pytest tests/patches tests/unit tests/integration tests/orchestration tests/release tests/upstream -q
 python scripts/smoke/runner-regression-smoke.py
+python scripts/smoke/runner-methods-smoke.py
 python scripts/smoke/runner-stability-smoke.py --duration 15
 python scripts/release/build-release-artifact.py
-python scripts/release/verify-release-artifact.py
-python scripts/release/simulate-downstream-stage.py
+python scripts/release/verify-release-artifact.py dist/basetool-runner-dev-<sha>.tar.gz
+python scripts/release/simulate-downstream-stage.py dist/basetool-runner-dev-<sha>.tar.gz
 ```
+
+CI macOS matrix not yet verified on GitHub Actions — see [docs/testing.md](docs/testing.md).
 
 ## Upstream sync
 
@@ -140,7 +168,7 @@ python scripts/sync-mhddos-upstream.py --tag 2.4.4
 python scripts/sync-mhddos-upstream.py --tag 2.4.4 --no-smoke --skip-subtree
 ```
 
-See [docs/testing.md](docs/testing.md) for the full test pyramid.
+See [docs/testing.md](docs/testing.md) for the full test pyramid and workability status table.
 
 ## Files
 - basetool.py — main script
@@ -157,5 +185,5 @@ See [docs/testing.md](docs/testing.md) for the full test pyramid.
 - scripts/smoke/ — localhost smoke harnesses
 - scripts/release/ — release tarball build, verify, and downstream stage simulation
 - docs/architecture.md — upstream integration architecture
-- docs/testing.md — testing commands
+- docs/testing.md — testing commands and workability status
 - README.md — project documentation

@@ -6,6 +6,35 @@ simulation on top of the Phase 2 cutover gates.
 
 Architecture context: [docs/architecture.md](architecture.md).
 
+## Workability status
+
+Keep this table current when the ship gate is re-run locally or on CI.
+
+| Gate | Last result | Platform | Commit |
+|---|---|---|---|
+| Pytest (`tests/patches` … `tests/upstream`) | 61 passed, 1 skipped | Windows | `5889ff3` |
+| Regression snapshot smoke | parity OK | Windows | `5889ff3` |
+| Methods smoke | 8 PASS, SYN skip | Windows | `5889ff3` |
+| Stability smoke (`--duration 15`) | all PASS, 0% RSS | Windows | `5889ff3` |
+| Release verify | tarball + sha256 OK | Windows | `5889ff3` |
+| Downstream stage simulation | OK | Windows | `5889ff3` |
+| CI matrix (ubuntu/windows/macos) | pending | GitHub Actions | — |
+
+Expected skips on Windows: `SYN` (raw sockets), unwritable runtime dir
+(`tests/integration/test_config_matrix.py`).
+
+What each layer guards:
+
+- **Pytest packs** — adapter/runner units, config matrices, script CLI contracts,
+  tarball layout, JSON telemetry schema, upstream manifest/requirements/canaries.
+- **Methods smoke** — live localhost traffic for every registered attack method.
+- **Regression snapshot** — normalized console output matches the golden fixture.
+- **Stability smoke** — RSS and thread count stay flat over a timed run.
+- **Release verify** — built tarball matches the golden manifest and runs method smoke
+  from the extracted tree.
+- **Downstream simulation** — extract, configure, run method matrix, graceful
+  shutdown (SIGTERM on Linux/macOS, `terminate()` on Windows).
+
 ## Setup
 
 ```bash
@@ -68,7 +97,9 @@ Notes:
 - Windows downstream simulation uses `psutil.Process.terminate()` instead of
   SIGTERM; exit code `0` is not required on Windows for the terminate scenario.
 
-Local green run: Windows dev box, 2026-05-25 — full ship gate above exited `0`.
+Local green run: Windows dev box, 2026-05-25, commit `5889ff3` — full ship gate
+above exited `0` (61 pytest passed, 1 skipped; all smokes and release steps OK).
+Update the [Workability status](#workability-status) table when re-running.
 
 ## Phase 3 gate (release check)
 
