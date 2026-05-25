@@ -29,6 +29,7 @@ def normalize_output(text: str) -> str:
     text = re.sub(r"BaseTool> ?", "", text)
     text = re.sub(r"\[HH:MM:SS\] Resolved target .+\n", "", text)
     text = re.sub(r"\[HH:MM:SS\] Launching \d+ threads\.\.\.\n", "", text)
+    text = re.sub(r"\[HH:MM:SS\] Attack stopped\.\n?", "", text)
     text = re.sub(r"target .+ unreachable: .+\n", "", text)
     text = re.sub(r"PPS: [^\n|]+", "PPS: <N>", text)
     text = re.sub(r"BPS: [^\n]+", "BPS: <N>", text)
