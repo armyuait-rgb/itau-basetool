@@ -28,6 +28,7 @@
   - `impacket`
   - `requests`
   - `yarl`
+  - `cryptography`
 
 ## Встановлення
 
@@ -62,6 +63,7 @@ python scripts/sync-mhddos-upstream.py --tag 2.4.4 --no-smoke --skip-subtree
 
 ## Файли
 - basetool.py - Основний скрипт
+- crypto.py - AES-256-GCM helpers for encrypted runtime configs
 - requirements.txt - Cписок залежностей Python.
 - requirements-dev.txt - Залежності для тестів (pytest).
 - config.json - Файл конфігурації. Тут зберігаються налаштування за замовчуванням.
@@ -107,6 +109,7 @@ It supports TCP, UDP, SYN methods at L4 and GET, POST, STRESS, SLOW, GSB, BYPASS
   - `impacket`
   - `requests`
   - `yarl`
+  - `cryptography`
 
 ## Installation
 
@@ -141,6 +144,7 @@ See [docs/testing.md](docs/testing.md) for the full test pyramid.
 
 ## Files
 - basetool.py — main script
+- crypto.py — AES-256-GCM helpers for encrypted runtime configs
 - requirements.txt — list of Python dependencies
 - requirements-dev.txt — test dependencies (pytest)
 - config.json — configuration file containing default settings
