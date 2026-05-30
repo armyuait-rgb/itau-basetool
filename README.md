@@ -77,3 +77,9 @@ pip install -r requirements.txt
 - config.json — configuration file containing default settings
 - proxy.json — proxy source database
 - README.md — project documentation
+
+## Scope
+
+This repository is the **public core engine** only. Application packaging, UI integration, and deployment tooling live in separate downstream projects.
+
+See [docs/engine-boundary.md](docs/engine-boundary.md) for what belongs in this repo.
