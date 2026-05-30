@@ -2,7 +2,7 @@ usage: basetool.py [-h] [--json]
 
 BaseTool runner
 
-optional arguments:
+options:
   -h, --help  show this help message and exit
   --json      Emit structured monitor telemetry on stdout (table on stderr)
 

@@ -20,14 +20,21 @@ SCHEMA_PATH = REPO_ROOT / "tests/fixtures/json-telemetry.schema.json"
 
 def _parse_json_lines(text: str) -> list[dict]:
     rows = []
+    decoder = json.JSONDecoder()
     for line in text.splitlines():
         line = line.strip()
-        start = line.find("{")
-        if start == -1:
-            continue
-        parsed = json.loads(line[start:])
-        if "ts" in parsed:
-            rows.append(parsed)
+        idx = 0
+        while idx < len(line):
+            start = line.find("{", idx)
+            if start == -1:
+                break
+            try:
+                parsed, end = decoder.raw_decode(line, start)
+            except json.JSONDecodeError:
+                break
+            if "ts" in parsed:
+                rows.append(parsed)
+            idx = end
     return rows
 
 
