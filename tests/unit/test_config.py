@@ -29,5 +29,5 @@ def test_spawn_threads_builds_threads(tmp_config):
     config = json.loads(config_path.read_text(encoding="utf-8"))
     manager = AttackManager(config, [])
     keys = manager._spawn_threads()
-    assert keys == ["127.0.0.1"]
+    assert keys == ["127.0.0.1:8081"]
     assert len(manager.threads) == 4

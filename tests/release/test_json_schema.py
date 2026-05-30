@@ -25,7 +25,9 @@ def _parse_json_lines(text: str) -> list[dict]:
         start = line.find("{")
         if start == -1:
             continue
-        rows.append(json.loads(line[start:]))
+        parsed = json.loads(line[start:])
+        if "ts" in parsed:
+            rows.append(parsed)
     return rows
 
 
