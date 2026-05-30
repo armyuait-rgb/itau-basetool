@@ -1,0 +1,50 @@
+name: ci
+
+on:
+  push:
+    branches: [main, feature/mhddos-upstream-integration]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: test / ${{ matrix.os }} / py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Verify patches apply to clean upstream tag
+        run: pytest tests/patches/test_patches_apply.py -q
+
+      - name: Verify upstream import side effects
+        run: pytest tests/patches/test_import_side_effects.py -q
+
+      - name: Run unit tests with coverage gate
+        run: pytest tests/unit/ -q --cov=modules/basetool/adapter --cov=modules/basetool/runner --cov-report=term-missing --cov-fail-under=80
+
+      - name: Run per-method localhost smoke
+        run: python scripts/smoke/runner-methods-smoke.py
+
+      - name: Run regression snapshot smoke
+        run: python scripts/smoke/runner-regression-smoke.py
+
+      - name: Run extended test packs
+        run: pytest tests/integration tests/orchestration tests/release tests/upstream -q

@@ -1,0 +1,8 @@
+[2J[H
+
+
+
+
+Type start/stop/exit
+[s[1;1H[KPPS: 0 | BPS: -- B[2;1H[K---------------------------------------------------------[3;1H[KTarget                           Requests           Bytes[4;1H[K---------------------------------------------------------[5;1H[K[u[6;1H[KBaseTool> [6;1H[KBaseTool> [19:53:35 - INFO] Launching 4 threads...
+[19:53:35 - INFO] Attack stopped.

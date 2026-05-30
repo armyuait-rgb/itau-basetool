@@ -1,0 +1,10 @@
+[project]
+name = "basetool-runner"
+version = "0.0.0"
+description = "BaseTool runner with vendored MHDDoS upstream"
+requires-python = ">=3.9"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+pythonpath = ["."]
