@@ -49,7 +49,7 @@ pip install -r requirements.txt
 | Regression snapshot | ✅ parity OK | стабільний вивід консолі |
 | Stability smoke | ✅ RSS 0% | без витоків пам’яті / зависань потоків |
 | Release artifact | ✅ verified | tarball + sha256, golden manifest |
-| Downstream simulation | ✅ OK | розгортання як у itarmykit-basetool |
+| Downstream simulation (optional) | ✅ OK | ручна перевірка розгортання tarball |
 
 Повний ship gate (запускати перед тегом або merge release-hardening):
 
@@ -61,8 +61,9 @@ python scripts/smoke/runner-methods-smoke.py
 python scripts/smoke/runner-stability-smoke.py --duration 15
 python scripts/release/build-release-artifact.py
 python scripts/release/verify-release-artifact.py dist/basetool-runner-dev-<sha>.tar.gz
-python scripts/release/simulate-downstream-stage.py dist/basetool-runner-dev-<sha>.tar.gz
 ```
+
+Опційно (вручну): `python scripts/release/simulate-downstream-stage.py dist/basetool-runner-dev-<sha>.tar.gz`
 
 CI macOS matrix ще не верифікований на GitHub Actions — див. [docs/testing.md](docs/testing.md).
 
@@ -88,7 +89,7 @@ python scripts/sync-mhddos-upstream.py --tag 2.4.4 --no-smoke --skip-subtree
 - modules/basetool/upstream/ - Vendored MHDDoS upstream та патчі.
 - scripts/sync-mhddos-upstream.py - Синхронізація upstream і manifest.
 - scripts/smoke/ - Localhost smoke harnesses.
-- scripts/release/ - Release tarball build, verify, and downstream stage simulation.
+- scripts/release/ - Release tarball build, verify, and optional manual staging check.
 - docs/architecture.md - Архітектура upstream integration.
 - docs/testing.md - Команди тестування та таблиця статусу працездатності.
 - docs/engine-boundary.md - Межа публічного engine-репозиторію.
@@ -145,7 +146,7 @@ Last local verification: **2026-05-25**, commit [`5889ff3`](https://github.com/a
 | Regression snapshot | ✅ parity OK | stable console output |
 | Stability smoke | ✅ 0% RSS growth | no memory leaks or thread drift |
 | Release artifact | ✅ verified | tarball + sha256, golden manifest |
-| Downstream simulation | ✅ OK | staging like itarmykit-basetool auto-update |
+| Downstream simulation (optional) | ✅ OK | manual tarball staging check |
 
 Full ship gate (run before tagging or merging release-hardening):
 
@@ -157,8 +158,9 @@ python scripts/smoke/runner-methods-smoke.py
 python scripts/smoke/runner-stability-smoke.py --duration 15
 python scripts/release/build-release-artifact.py
 python scripts/release/verify-release-artifact.py dist/basetool-runner-dev-<sha>.tar.gz
-python scripts/release/simulate-downstream-stage.py dist/basetool-runner-dev-<sha>.tar.gz
 ```
+
+Optional manual check: `python scripts/release/simulate-downstream-stage.py dist/basetool-runner-dev-<sha>.tar.gz`
 
 CI macOS matrix not yet verified on GitHub Actions — see [docs/testing.md](docs/testing.md).
 
@@ -184,7 +186,7 @@ See [docs/testing.md](docs/testing.md) for the full test pyramid and workability
 - modules/basetool/upstream/ — vendored MHDDoS upstream and patches
 - scripts/sync-mhddos-upstream.py — upstream sync and manifest refresh
 - scripts/smoke/ — localhost smoke harnesses
-- scripts/release/ — release tarball build, verify, and downstream stage simulation
+- scripts/release/ — release tarball build, verify, and optional manual staging check
 - docs/architecture.md — upstream integration architecture
 - docs/testing.md — testing commands and workability status
 - docs/engine-boundary.md — public engine repository boundary

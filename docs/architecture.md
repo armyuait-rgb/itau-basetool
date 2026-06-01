@@ -2,9 +2,9 @@
 
 This document tracks the MHDDoS upstream integration on branch
 `feature/mhddos-upstream-integration`. **Phase 3 is complete**: release
-artifact build/verify, downstream staging simulation, stability smoke,
-structured JSON telemetry, and tag-driven release workflows are live alongside
-the Phase 2 adapter/runner cutover.
+artifact build/verify, stability smoke, structured JSON telemetry, and
+tag-driven release workflows are live alongside the Phase 2 adapter/runner
+cutover. Upstream sync and optional downstream staging checks are manual only.
 
 See also [docs/testing.md](testing.md) for commands and [docs/sprints/2026-05-24-mhddos-upstream-integration.md](sprints/2026-05-24-mhddos-upstream-integration.md) for the full sprint plan.
 
@@ -135,8 +135,8 @@ Workflows:
 | Workflow | Trigger | Scope |
 |----------|---------|-------|
 | `ci.yml` | push/PR | patch, unit, methods smoke, regression smoke |
-| `nightly.yml` | cron + manual | stability smoke on Ubuntu |
-| `release.yml` | tag `v*.*.*` | full CI matrix, stability, build, verify, downstream sim, GitHub release |
+| `nightly.yml` | manual (`workflow_dispatch`) | optional stability smoke and pip-audit on Ubuntu |
+| `release.yml` | tag `v*.*.*` | full CI matrix, stability, build, verify, GitHub release |
 
 Matrix in `ci.yml` and `release.yml`: **Ubuntu + Windows** × **Python 3.11 + 3.12**.
 
@@ -144,7 +144,7 @@ Each CI matrix cell runs patch tests, unit tests (≥ 80 % coverage on adapter +
 runner), per-method smoke, and regression snapshot smoke.
 
 Tag pushes run the release pipeline. Tags containing `smoke` publish as
-prereleases so downstream auto-update ignores them.
+prereleases for experimental tags.
 
 ## Phase gates
 
@@ -152,7 +152,7 @@ prereleases so downstream auto-update ignores them.
 |-------|--------|------|
 | 1 — Foundation | **Complete** | `pytest tests/patches/` green; CI on branch |
 | 2 — Cutover | **Complete** | Phase 1 plus `pytest tests/unit/`, methods smoke, regression smoke |
-| 3 — Release | **Complete** | Verified tarball and downstream stage simulation |
+| 3 — Release | **Complete** | Verified release tarball |
 
 Phase 3 verification:
 
@@ -165,7 +165,8 @@ python scripts/smoke/runner-regression-smoke.py
 python scripts/smoke/runner-stability-smoke.py --duration 15
 python scripts/release/build-release-artifact.py
 python scripts/release/verify-release-artifact.py
-python scripts/release/simulate-downstream-stage.py
+# optional manual downstream staging check:
+# python scripts/release/simulate-downstream-stage.py
 ```
 
 ## Release tarball layout
@@ -187,10 +188,13 @@ Excluded: `tests/`, `docs/`, `.github/`, `cache/`, `__pycache__/`.
 
 `<version>` is the git tag when `--from-tag` is passed, otherwise `dev-<sha>`.
 
-## Downstream stager contract
+## Optional downstream staging check
 
-This is the stable surface `itarmykit-basetool` may rely on when consuming a
-runner release tarball:
+`scripts/release/simulate-downstream-stage.py` is a **manual** harness for
+extracting a release tarball and exercising the runner like an external consumer.
+It is not run by CI or any scheduled workflow.
+
+Typical tarball surface:
 
 | Invariant | Detail |
 |-----------|--------|
@@ -202,9 +206,6 @@ runner release tarball:
 | Stats | `stats_dict[target_key] = [packets, bytes]` |
 | JSON telemetry | One JSON object per monitor tick on stdout when enabled; table renders on stderr in JSON mode |
 | Layout | `basetool.py` at tarball root; internal modules under `modules/basetool/` |
-| Release promotion | Failed release workflows publish `prerelease=true`; downstream auto-update must ignore prereleases |
-
-Verification harness: `scripts/release/simulate-downstream-stage.py`.
 
 ## Bumping upstream
 

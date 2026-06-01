@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Simulate downstream staging and auto-update consumption of a runner tarball."""
+"""Optional manual check: stage a release tarball and exercise the runner."""
 
 from __future__ import annotations
 
