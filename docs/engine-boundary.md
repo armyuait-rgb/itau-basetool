@@ -5,7 +5,7 @@ This repository publishes the **BaseTool core engine** only:
 - `basetool.py`
 - `config.json`
 - `proxy.json`
-- `requirements.txt`
+- `pyproject.toml`
 
 ## What belongs here
 

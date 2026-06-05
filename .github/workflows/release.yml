@@ -27,10 +27,11 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-dev.txt
+        run: uv sync
 
       - name: Verify patches apply to clean upstream tag
         run: pytest tests/patches/test_patches_apply.py -q
@@ -64,10 +65,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-dev.txt
+        run: uv sync
 
       - name: Run stability smoke
         run: python scripts/smoke/runner-stability-smoke.py --duration 60
@@ -109,10 +111,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-dev.txt
+        run: uv sync
 
       - name: Download artifact
         uses: actions/download-artifact@v4

@@ -11,3 +11,7 @@ cache/
 out.txt
 err.txt
 out_actual.txt
+
+# uv
+.venv/
+python.overflow/

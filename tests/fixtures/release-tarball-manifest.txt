@@ -32,4 +32,4 @@ modules/basetool/upstream/mhddos/start.py
 modules/basetool/upstream/patches/0001-stats-hook.patch
 modules/basetool/upstream/patches/0002-guard-main.patch
 proxy.json
-requirements.txt
+pyproject.toml

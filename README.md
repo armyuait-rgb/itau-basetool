@@ -23,19 +23,14 @@
 
 - Python 3.9+
 - права root для SYN flood (RAW‑сокети)
-- залежності з `requirements.txt`:
-  - `PyRoxy`
-  - `impacket`
-  - `requests`
-  - `yarl`
-  - `cryptography`
+- [uv](https://docs.astral.sh/uv/) для керування залежностями
 
 ## Встановлення
 
 ```bash
 git clone <repo-url>
 cd BaseTool
-pip install -r requirements.txt
+uv sync
 ```
 
 ## Перевірка працездатності
@@ -54,7 +49,7 @@ pip install -r requirements.txt
 Повний ship gate (запускати перед тегом або merge release-hardening):
 
 ```bash
-pip install -r requirements.txt -r requirements-dev.txt
+uv sync
 python -m pytest tests/patches tests/unit tests/integration tests/orchestration tests/release tests/upstream -q
 python scripts/smoke/runner-regression-smoke.py
 python scripts/smoke/runner-methods-smoke.py
@@ -79,8 +74,7 @@ python scripts/sync-mhddos-upstream.py --tag 2.4.4 --no-smoke --skip-subtree
 ## Файли
 - basetool.py - Основний скрипт
 - crypto.py - AES-256-GCM helpers for encrypted runtime configs
-- requirements.txt - Cписок залежностей Python.
-- requirements-dev.txt - Залежності для тестів (pytest).
+- pyproject.toml - Конфігурація проекту та залежності (uv).
 - config.json - Файл конфігурації. Тут зберігаються налаштування за замовчуванням.
 - proxy.json - База джерел проксі-серверів.
 - modules/basetool/adapter/ - Адаптер атак і METHOD_REGISTRY.
@@ -120,19 +114,14 @@ It supports TCP, UDP, SYN methods at L4 and GET, POST, STRESS, SLOW, GSB, BYPASS
 
 - Python 3.9+
 - Root privileges for SYN flood RAW sockets
-- Dependencies from `requirements.txt`:
-  - `PyRoxy`
-  - `impacket`
-  - `requests`
-  - `yarl`
-  - `cryptography`
+- [uv](https://docs.astral.sh/uv/) for dependency management
 
 ## Installation
 
 ```bash
 git clone <repo-url>
 cd BaseTool
-pip install -r requirements.txt
+uv sync
 ```
 
 ## Workability check
@@ -151,7 +140,7 @@ Last local verification: **2026-05-25**, commit [`5889ff3`](https://github.com/a
 Full ship gate (run before tagging or merging release-hardening):
 
 ```bash
-pip install -r requirements.txt -r requirements-dev.txt
+uv sync
 python -m pytest tests/patches tests/unit tests/integration tests/orchestration tests/release tests/upstream -q
 python scripts/smoke/runner-regression-smoke.py
 python scripts/smoke/runner-methods-smoke.py
@@ -176,8 +165,7 @@ See [docs/testing.md](docs/testing.md) for the full test pyramid and workability
 ## Files
 - basetool.py — main script
 - crypto.py — AES-256-GCM helpers for encrypted runtime configs
-- requirements.txt — list of Python dependencies
-- requirements-dev.txt — test dependencies (pytest)
+- pyproject.toml — project configuration and dependencies (uv)
 - config.json — configuration file containing default settings
 - proxy.json — proxy source database
 - modules/basetool/adapter/ — attack adapter and METHOD_REGISTRY

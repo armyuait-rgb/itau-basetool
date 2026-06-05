@@ -15,8 +15,6 @@ itau-basetool/
 ├── basetool.py                         ← thin entrypoint
 ├── config.json
 ├── proxy.json
-├── requirements.txt
-├── requirements-dev.txt
 ├── pyproject.toml
 ├── THIRD_PARTY_NOTICES.md
 ├── modules/
@@ -157,7 +155,7 @@ prereleases for experimental tags.
 Phase 3 verification:
 
 ```bash
-pip install -r requirements.txt -r requirements-dev.txt
+uv sync
 pytest tests/patches/
 pytest tests/unit/ -q --cov=modules/basetool/adapter --cov=modules/basetool/runner --cov-report=term-missing --cov-fail-under=80
 python scripts/smoke/runner-methods-smoke.py
@@ -182,7 +180,7 @@ Tarball contents:
 
 - `basetool.py` at the archive root
 - `modules/basetool/` adapter, runner, upstream vendor tree, and `UPSTREAM.json`
-- `config.json`, `proxy.json`, `requirements.txt`, `README.md`, `THIRD_PARTY_NOTICES.md`
+- `config.json`, `proxy.json`, `pyproject.toml`, `README.md`, `THIRD_PARTY_NOTICES.md`
 
 Excluded: `tests/`, `docs/`, `.github/`, `cache/`, `__pycache__/`.
 

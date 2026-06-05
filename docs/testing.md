@@ -38,7 +38,7 @@ What each layer guards:
 ## Setup
 
 ```bash
-pip install -r requirements.txt -r requirements-dev.txt
+uv sync
 ```
 
 ## Extended test packs

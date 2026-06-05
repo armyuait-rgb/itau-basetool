@@ -20,10 +20,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-dev.txt
+        run: uv sync
 
       - name: Run stability smoke
         run: python scripts/smoke/runner-stability-smoke.py --duration 60
@@ -31,8 +32,9 @@ jobs:
       - name: Run pip-audit
         continue-on-error: true
         run: |
+          uv export --no-dev --no-emit-project -o requirements-audit.txt
           python -m pip install pip-audit
-          pip-audit -r requirements.txt --format=json | tee audit.json
+          pip-audit -r requirements-audit.txt --format=json | tee audit.json
           python - <<'PY'
           import json
           from pathlib import Path

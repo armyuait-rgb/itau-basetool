@@ -9,6 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DIST_DIR = REPO_ROOT / "dist"
 MANIFEST_FIXTURE = REPO_ROOT / "tests/fixtures/release-tarball-manifest.txt"
 FORBIDDEN_PREFIXES = ("tests/", "docs/", ".github/", "__pycache__/", "cache/")
+OPTIONAL_ENTRIES = {"uv.lock"}
 
 
 def _build_archive() -> Path:
@@ -36,7 +37,9 @@ def test_tarball_layout_matches_golden_manifest():
         for line in MANIFEST_FIXTURE.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    assert names == expected
+    # Filter out optional entries so the golden manifest stays stable
+    core = [n for n in names if n not in OPTIONAL_ENTRIES]
+    assert core == expected
 
 
 def test_tarball_excludes_forbidden_prefixes():
