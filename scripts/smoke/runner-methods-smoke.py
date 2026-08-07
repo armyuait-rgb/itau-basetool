@@ -4,11 +4,8 @@
 from __future__ import annotations
 
 import importlib.util
-import json
-import os
 import platform
 import socket
-import subprocess
 import sys
 import threading
 import time
@@ -32,12 +29,17 @@ quiet_http = _load_quiet_http()
 
 
 def _adapter():
-    from modules.basetool.adapter import L4_METHODS, METHOD_REGISTRY, make_attack_thread
+    from modules.basetool.adapter import (
+        L4_METHODS,
+        METHOD_REGISTRY,
+        make_httpflood_attack_thread,
+        make_layer4_attack_thread,
+    )
 
-    return L4_METHODS, METHOD_REGISTRY, make_attack_thread
+    return L4_METHODS, METHOD_REGISTRY, make_httpflood_attack_thread, make_layer4_attack_thread,
 
 
-class _AnyMethodHandler(quiet_http.QuietOKHandler):
+class _AnyMethodHandler(quiet_http.QuietOKHandler):     # type: ignore
     pass
 
 
@@ -142,11 +144,11 @@ def _run_method(
         if not supported:
             return "SKIP", reason
 
-    stats = {}
+    stats: dict = {}
     lock = threading.Lock()
     event = threading.Event()
     event.set()
-    target_key = ""
+    target_key: str | None = ""
     threads = []
 
     if method in l4_methods:
@@ -216,11 +218,12 @@ def main() -> int:
     if str(runner_root) not in sys.path:
         sys.path.insert(0, str(runner_root))
 
-    l4_methods, method_registry, make_attack_thread = _adapter()
+    l4_methods, method_registry, make_httpflood_attack_thread, make_layer4_attack_thread, = _adapter()
     results: list[tuple[str, str, str]] = []
     with _http_server() as (_h1, l7_port), _tcp_echo(port=8082) as (_h2, l4_tcp_port), _udp_echo(port=8083) as (_h3, l4_udp_port):
         host = "127.0.0.1"
         for method in sorted(method_registry):
+            make_attack_thread = make_layer4_attack_thread if method in l4_methods else make_httpflood_attack_thread
             status, detail = _run_method(
                 method,
                 host,

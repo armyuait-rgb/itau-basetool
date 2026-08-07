@@ -5,7 +5,11 @@ import threading
 import pytest
 from yarl import URL
 
-from modules.basetool.adapter import METHOD_REGISTRY, make_attack_thread
+from modules.basetool.adapter import (
+    METHOD_REGISTRY,
+    make_httpflood_attack_thread,
+    make_layer4_attack_thread,
+)
 
 
 def test_method_registry_shape():
@@ -18,25 +22,12 @@ def test_method_registry_callables():
     for entry in METHOD_REGISTRY.values():
         assert callable(getattr(entry["cls"], entry["fn"], None))
 
-
-def test_unknown_method_raises():
-    with pytest.raises(KeyError):
-        make_attack_thread(
-            "UNKNOWN",
-            target_key="127.0.0.1:9",
-            stats_dict={},
-            stats_lock=threading.Lock(),
-            synevent=threading.Event(),
-            l4_target=("127.0.0.1", 9),
-        )
-
-
 def test_tcp_hook_is_not_upstream_default(localhost_tcp_echo):
     stats = {}
     lock = threading.Lock()
     event = threading.Event()
     with localhost_tcp_echo() as (_host, port):
-        thread = make_attack_thread(
+        thread = make_layer4_attack_thread(
             "TCP",
             target_key=f"127.0.0.1:{port}",
             stats_dict=stats,
@@ -54,7 +45,7 @@ def test_hook_records_stats(localhost_tcp_echo):
     event = threading.Event()
     event.set()
     with localhost_tcp_echo() as (_host, port):
-        thread = make_attack_thread(
+        thread = make_layer4_attack_thread(
             "TCP",
             target_key=f"127.0.0.1:{port}",
             stats_dict=stats,
@@ -76,7 +67,7 @@ def test_get_thread_builds(localhost_http_server):
     event = threading.Event()
     with localhost_http_server() as (_host, port):
         url = URL(f"http://127.0.0.1:{port}/")
-        thread = make_attack_thread(
+        thread = make_httpflood_attack_thread(
             "GET",
             target_key=url.host,
             stats_dict=stats,

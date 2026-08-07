@@ -7,7 +7,10 @@ from unittest.mock import patch
 import pytest
 from yarl import URL
 
-from modules.basetool.adapter import make_attack_thread
+from modules.basetool.adapter import (
+    make_httpflood_attack_thread,
+    make_layer4_attack_thread,
+)
 from modules.basetool.runner.manager import AttackManager, console
 
 
@@ -17,7 +20,7 @@ def test_udp_hook_records_stats(localhost_udp_echo):
     event = threading.Event()
     event.set()
     with localhost_udp_echo() as (_host, port):
-        thread = make_attack_thread(
+        thread = make_layer4_attack_thread(
             "UDP",
             target_key=f"127.0.0.1:{port}",
             stats_dict=stats,
@@ -41,7 +44,7 @@ def test_bypass_records_stats(localhost_http_server):
     event = threading.Event()
     with localhost_http_server() as (_host, port):
         url = URL(f"http://127.0.0.1:{port}/")
-        thread = make_attack_thread(
+        thread = make_httpflood_attack_thread(
             "BYPASS",
             target_key=url.host,
             stats_dict=stats,
