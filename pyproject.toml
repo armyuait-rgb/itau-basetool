@@ -3,8 +3,36 @@ name = "basetool-runner"
 version = "0.0.0"
 description = "BaseTool runner with vendored MHDDoS upstream"
 requires-python = ">=3.9"
+dependencies = [
+    "certifi==2024.7.4",
+    "cloudscraper==1.2.71",
+    "cryptography>=47.0.0",
+    "dnspython==2.6.1",
+    "icmplib>=2.1.1",
+    "impacket>=0.13.1",
+    "pyasn1==0.4.8",
+    "pyroxy",
+    "requests>=2.32.5",
+    "yarl>=1.22.0",
+]
+
+[dependency-groups]
+dev = [
+    "freezegun>=1.5",
+    "jsonschema>=4",
+    "psutil>=5.9",
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pytest-mock>=3.14",
+]
+
+[tool.mypy]
+disable_error_code = ["method-assign", "import-untyped"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
 pythonpath = ["."]
+
+[tool.uv.sources]
+pyroxy = { git = "https://github.com/MHProDev/PyRoxy.git" }
