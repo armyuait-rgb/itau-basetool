@@ -1,81 +1,99 @@
 #!/usr/bin/env python3
-"""BaseTool runner entrypoint."""
+"""BaseTool runner entrypoint (public dev entrypoint)."""
 
 from __future__ import annotations
 
 import argparse
+import logging
+import multiprocessing as mp
 import os
 import sys
+import threading
+import traceback
 from pathlib import Path
 
-from modules.basetool.runner import AttackManager, console, load_json_safe, resolve_runtime_dir
+
+logging.basicConfig(
+    format="[%(asctime)s] %(message)s",
+    datefmt="%H:%M:%S",
+    stream=sys.stdout,
+)
+
+from modules.basetool.runner import AttackManager, console, load_json_safe
 
 
-def load_runtime_config(base_dir: Path) -> tuple[dict, dict | list]:
-    from crypto import decrypt_config
+def format_uncaught_exception(exc_type, exc_value, exc_tb) -> str:
+    return "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
 
-    use_plaintext = os.environ.get("BASETOOL_DEV_PLAINTEXT_CONFIGS", "").strip() == "1"
-    if use_plaintext:
-        config_path = base_dir / "config.json"
-        proxy_path = base_dir / "proxy.json"
-        if not config_path.exists():
-            print("Error: config.json not found")
-            sys.exit(1)
-        if not proxy_path.exists():
-            print("Error: proxy.json not found")
-            sys.exit(1)
-        return load_json_safe(config_path), load_json_safe(proxy_path)
 
-    config_path = base_dir / "config.enc"
-    proxy_path = base_dir / "proxy.enc"
+def log_uncaught_exception(exc_type, exc_value, exc_tb) -> None:
+    if isinstance(exc_type, type) and issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+        return
+    text = format_uncaught_exception(exc_type, exc_value, exc_tb)
+    try:
+        sys.stderr.write("Uncaught exception:\n")
+        sys.stderr.write(text)
+        if not text.endswith("\n"):
+            sys.stderr.write("\n")
+        sys.stderr.flush()
+    except Exception:
+        fallback = getattr(sys, "__stderr__", None)
+        if fallback is None:
+            return
+        try:
+            fallback.write(text)
+            fallback.flush()
+        except Exception:
+            pass
+
+
+def _log_uncaught_thread_exception(args: threading.ExceptHookArgs) -> None:
+    log_uncaught_exception(args.exc_type, args.exc_value, args.exc_traceback)
+
+
+def install_faulthandler() -> None:
+    try:
+        import faulthandler
+
+        faulthandler.enable(file=sys.stderr, all_threads=True)
+    except Exception:
+        pass
+
+
+def install_uncaught_exception_hooks() -> None:
+    install_faulthandler()
+    sys.excepthook = log_uncaught_exception
+    threading.excepthook = _log_uncaught_thread_exception
+
+
+def resolve_runtime_dir() -> Path:
+    """Return the directory containing config.json / proxy.json for this process."""
+    override = os.environ.get("BASETOOL_RUNTIME_DIR")
+    if override:
+        return Path(override)
+    if getattr(sys, "frozen", False):
+        return Path.cwd()
+    return Path.cwd()
+
+
+def main():
+    base_dir = resolve_runtime_dir()
+    config_path = base_dir / "config.json"
+    proxy_path = base_dir / "proxy.json"
+
     if not config_path.exists():
-        print("Error: config.enc not found")
+        print("Error: config.json not found")
         sys.exit(1)
     if not proxy_path.exists():
-        print("Error: proxy.enc not found")
+        print("Error: proxy.json not found")
         sys.exit(1)
 
-    try:
-        config = decrypt_config(config_path)
-        proxy_providers = decrypt_config(proxy_path)
-    except Exception as exc:
-        print(f"Error: failed to decrypt runtime config: {exc}")
-        sys.exit(1)
+    config = load_json_safe(config_path)
+    proxy_providers = load_json_safe(proxy_path)
 
-    return config, proxy_providers
-
-
-def build_parser() -> argparse.ArgumentParser:
-    return argparse.ArgumentParser(
-        prog="basetool.py",
-        description="BaseTool runner",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=(
-            "Console commands on stdin: start, stop, exit\n"
-            "Environment:\n"
-            "  BASETOOL_JSON=1          Emit structured monitor telemetry on stdout\n"
-            "  BASETOOL_RUNTIME_DIR     Directory containing config.json and proxy.json\n"
-            "  BASETOOL_DEV_PLAINTEXT_CONFIGS=1  Use plaintext config.json/proxy.json"
-        ),
-    )
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Emit structured monitor telemetry on stdout (table on stderr)",
-    )
-    args = parser.parse_args(argv)
-
-    json_output = args.json or os.environ.get("BASETOOL_JSON", "").strip() == "1"
-    base_dir = resolve_runtime_dir()
-    config, proxy_providers = load_runtime_config(base_dir)
-    manager = AttackManager(config, proxy_providers, json_output=json_output)
-    console(manager)
-    return 0
-
+    mgr = AttackManager(config, proxy_providers)
+    console(mgr)
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

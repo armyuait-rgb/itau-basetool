@@ -1,8 +1,7 @@
-PyRoxy @ git+https://github.com/MHProDev/PyRoxy.git
+PyRoxy
 impacket
 requests
 yarl
-cryptography
 cloudscraper==1.2.71
 certifi==2024.7.4
 dnspython==2.6.1
